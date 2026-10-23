@@ -1,5 +1,6 @@
 ARG UBUNTU=20.04
 FROM ubuntu:${UBUNTU}
+ARG UBUNTU
 ARG PHPV=7.4
 ARG MITIGATE=0
 ARG USERINI=0
@@ -7,6 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive PHPV=${PHPV}
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends nginx php${PHPV}-fpm python3 \
+      $( [ "$UBUNTU" = 18.04 ] && echo python3.8 ) \
  && rm -rf /var/lib/apt/lists/*
 
 COPY site-nginx.conf /etc/nginx/sites-enabled/default

@@ -804,6 +804,15 @@ def build_units(host: Host, pkgs: Dict[str, str], procs: Optional[List[Proc]],
         branch = branch_of(load.rsplit("/", 1)[1])
         sapi_dir = f"/etc/php/{branch[0]}.{branch[1]}/apache2" if branch else None
         ini_files = ([f"{sapi_dir}/php.ini"] + host.glob(f"{sapi_dir}/conf.d/*.ini")) if sapi_dir else []
+        # Official php:*-apache images load "php.load" and keep the build version in a header file.
+        header_version = None
+        if branch is None and host.exists("/usr/local/include/php/main/php_version.h"):
+            m = re.search(r'#define\s+PHP_VERSION\s+"(\d+\.\d+\.\d+)',
+                          host.read_text("/usr/local/include/php/main/php_version.h") or "")
+            if m:
+                header_version = m.group(1)
+                branch = branch_of(header_version)
+                ini_files = ["/usr/local/etc/php/php.ini"] + host.glob("/usr/local/etc/php/conf.d/*.ini")
         u = Unit(f"U{len(units) + 1:02d}", "apache2handler", branch,
                  package=f"libapache2-mod-php{branch[0]}.{branch[1]}" if branch else None, service="apache2")
         u.layers = [system_ini_layer(host, ini_files), apache.php_layer]
@@ -813,6 +822,10 @@ def build_units(host: Host, pkgs: Dict[str, str], procs: Optional[List[Proc]],
             masters = [p for p in procs if p.comm in ("apache2", "httpd") and p.start]
             u.running = bool(masters)
             u.started = min(p.start for p in masters) if masters else None
+        if header_version:
+            u.package, u.service = None, ""
+            u.version = header_version
+            u.version_source = "헤더 파일 /usr/local/include/php/main/php_version.h (공식 Docker 이미지)"
         units.append(u)
 
     # Apache proxy_fcgi vhosts route to FPM pools like nginx does.
@@ -1163,7 +1176,8 @@ def remediations(units: List[Unit], findings: List[Finding], vstatus, host: Host
 
     for u in units:
         status, vexp = vstatus[u.id]
-        restart = f"sudo systemctl restart {u.service}"
+        restart = (f"sudo systemctl restart {u.service}" if u.service
+                   else "docker restart <컨테이너>   # 컨테이너라면 이미지 재빌드·재배포가 원칙")
         recheck = "sudo python3 php2shell_host.py  # 재점검으로 판정 변화 확인"
         target = (f"{u.pool.file} 의 [{u.pool.name}] 섹션" if u.pool else
                   "Apache 설정(예: /etc/apache2/conf-available/php2shell.conf, a2enconf로 활성화)")
@@ -1174,7 +1188,8 @@ def remediations(units: List[Unit], findings: List[Finding], vstatus, host: Host
         elif status == "eol":
             add(Remediation(
                 "now", f"PHP {u.branch_str}: 패치가 존재하지 않는 브랜치 — 노출 축소 결정",
-                vexp, f"{u.package} {u.package_version or ''}".strip(), u.version_source or u.package or "-",
+                vexp, f"{u.package} {u.package_version or ''}".strip() if u.package else f"PHP {u.version or u.branch_str}",
+                u.version_source or u.package or "-",
                 "업그레이드 일정과 별개로, 그때까지의 노출을 줄이는 결정이 필요합니다.\n"
                 "· 외부 접근 범위 축소(관리 화면·업로드 경로 접근 제한, WAF 적용 여부 확인)\n"
                 "· 아래 임시 완화 항목 전부 적용\n"
@@ -1183,16 +1198,22 @@ def remediations(units: List[Unit], findings: List[Finding], vstatus, host: Host
         elif status == "backport_only":
             add(Remediation(
                 "now", f"PHP {u.branch_str}: 패키지 공급원에 백포트 여부 확인",
-                vexp, f"{u.package} {u.package_version or ''}", package_origin(u.package_version or ""),
-                "패키지 공급원의 보안 업데이트를 확인하고, 없으면 지원 브랜치로 이전합니다.",
-                f"zcat /usr/share/doc/{u.package}/changelog.Debian.gz | grep -E '{'|'.join(CVES)}'",
+                vexp,
+                f"{u.package} {u.package_version or ''}".strip() if u.package else f"PHP {u.version or u.branch_str}",
+                package_origin(u.package_version or "") if u.package else (u.version_source or "-"),
+                "패키지 공급원의 보안 업데이트를 확인하고, 없으면 지원 브랜치로 이전합니다." if u.package else
+                "공식 이미지에는 벤더 백포트가 없습니다. 수정이 포함된 지원 브랜치 태그로 베이스 이미지를 올려 재빌드·재배포합니다.",
+                f"zcat /usr/share/doc/{u.package}/changelog.Debian.gz | grep -E '{'|'.join(CVES)}'" if u.package else
+                "docker exec <컨테이너> php -v",
                 "", f"{DOC}:69"), u.id)
         elif status == "vulnerable":
             add(Remediation(
-                "now", f"{u.package} 보안 업데이트",
+                "now", f"{u.package or 'PHP ' + u.branch_str} 보안 업데이트",
                 vexp, u.package_version or u.version or "-", u.version_source or "-",
-                f"sudo apt-get install --only-upgrade {u.package} && {restart}",
-                f"dpkg -s {u.package} | grep Version", "", f"{DOC}:65-68"), u.id)
+                f"sudo apt-get install --only-upgrade {u.package} && {restart}" if u.package else
+                f"베이스 이미지를 수정 버전 이상의 태그(예: php:{'.'.join(map(str, FIXED[u.branch]))}-…)로 올려 다시 빌드·배포",
+                f"dpkg -s {u.package} | grep Version" if u.package else "docker exec <컨테이너> php -v",
+                "", f"{DOC}:65-68"), u.id)
 
         if status == "patched":
             continue
@@ -1203,8 +1224,10 @@ def remediations(units: List[Unit], findings: List[Finding], vstatus, host: Host
                 f"{u.package or u.label} {u.package_version or ''} (서비스 중지)".strip(),
                 u.version_source or u.package or (u.pool.file if u.pool else "-"),
                 (f"필요 없으면 제거: sudo apt-get purge {u.package}\n" if u.package else "")
-                + f"유지한다면 자동 시작 해제: sudo systemctl disable --now {u.service or 'php-fpm'}",
-                f"systemctl is-enabled {u.service or 'php-fpm'}" + (f"; dpkg -l {u.package}" if u.package else "")), u.id)
+                + (f"유지한다면 자동 시작 해제: sudo systemctl disable --now {u.service}" if u.service else
+                   "컨테이너라면 이 PHP를 시작하는 서비스/CMD를 이미지에서 제거하거나 실행하지 않습니다."),
+                (f"systemctl is-enabled {u.service}" if u.service else "docker exec <컨테이너> ps -e")
+                + (f"; dpkg -l {u.package}" if u.package else "")), u.id)
             continue
         uf = {f.cve: f for f in findings if f.unit == u.id}
 
@@ -1214,7 +1237,8 @@ def remediations(units: List[Unit], findings: List[Finding], vstatus, host: Host
             add(Remediation(
                 "now", "변경한 완화 설정이 로드됐는지 확인·재시작",
                 "완화 설정 파일이 서비스 시작 이후 수정됐습니다. reload로 반영됐는지 파일만으로는 알 수 없습니다(mtime 기준 추정).",
-                "\n".join(f.condition for f in pending), u.pool.file if u.pool else u.service,
+                "\n".join(f.condition for f in pending),
+                u.pool.file if u.pool else (u.service or u.version_source or "-"),
                 ("sudo nginx -t && sudo systemctl reload nginx\n" if via_nginx else "") + restart,
                 recheck, "재시작 중 짧은 요청 실패 가능", f"{DOC}:108"), u.id)
 
@@ -1264,9 +1288,13 @@ def remediations(units: List[Unit], findings: List[Finding], vstatus, host: Host
             lines += [
                 "",
                 "memory_limit=-1은 요청별 상한을 없애므로 서비스 단위 메모리 상한을 함께 둡니다:",
+            ] + ([
                 f"sudo systemctl edit {u.service}",
                 "  [Service]",
                 "  MemoryMax=<서버 메모리에 맞는 값>",
+            ] if u.service else [
+                "컨테이너 메모리 제한: compose의 mem_limit 또는 docker run --memory",
+            ]) + [
                 "(RLIMIT_AS/RLIMIT_DATA는 사용하지 않습니다)",
             ]
             current = [set_desc(ml), set_desc(pm), set_desc(um)]

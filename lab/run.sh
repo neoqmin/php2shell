@@ -21,11 +21,13 @@ for svc in $(docker compose config --services); do
   done
 
   "$PY" ../php2shell_remote.py "http://127.0.0.1:$port/" --json > "$OUT/$svc.remote.json"
-  remote=$("$PY" -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["status"], r.get("detected_version") or "-")' "$OUT/$svc.remote.json")
+  remote=$("$PY" -c 'import json,sys; r=json.load(open(sys.argv[1], encoding="utf-8")); print(r["status"], r.get("detected_version") or "-")' "$OUT/$svc.remote.json")
 
   docker cp ../php2shell_host.py "$svc:/tmp/php2shell_host.py" >/dev/null
   docker cp "$OUT/$svc.remote.json" "$svc:/tmp/remote.json" >/dev/null
-  output=$(docker exec "$svc" python3 /tmp/php2shell_host.py --remote-json /tmp/remote.json \
+  # php2shell_host.py needs Python 3.7+; Ubuntu 18.04 ships 3.6 and needs the python3.8 package.
+  py=$(docker exec "$svc" sh -c 'for p in python3.12 python3.11 python3.10 python3.9 python3.8 python3; do command -v $p && break; done')
+  output=$(docker exec "$svc" "$py" /tmp/php2shell_host.py --remote-json /tmp/remote.json \
            --out /tmp/php2shell_report 2>&1)
   hrc=$?
   echo "$output" > "$OUT/$svc.host.txt"

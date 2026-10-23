@@ -13,7 +13,8 @@ PHP2Shell(CVE-2026-109618 / CVE-2026-109619) 노출을 **비파괴로** 점검�
 
 ## 요구 사항
 
-- Python 3.8 이상 (Ubuntu 20.04 기본 Python 포함)
+- Python 3.8 이상 (Ubuntu 20.04 이후 기본 Python 포함)
+- Ubuntu 18.04의 기본 `python3`는 3.6이라 `php2shell_host.py`가 문법 오류로 실행되지 않습니다(이때 종료 코드 1은 Python이 낸 것이며 판정이 아닙니다). `sudo apt-get install python3.8` 후 `python3.8`로 실행하십시오.
 - 표준 라이브러리만 사용하므로 별도 설치는 필요 없습니다.
 
 ## 서버 내부 점검 (`php2shell_host.py`)
@@ -66,7 +67,7 @@ python3 php2shell_host.py --root /mnt/server-copy
 
 - 설정 파일로 계산한 실효값이므로 실행 중인 프로세스의 실제 값과 다를 수 있습니다.
 - Apache의 `php_value`/`php_admin_value`는 VirtualHost·Directory 구분 없이 전역으로 취급합니다. `.htaccess`는 `AllowOverride`를 해석하지 않으므로 위험을 높이는 값만 반영합니다.
-- 공식 Docker `php` 이미지(`/usr/local/etc/php`)와 RHEL의 mod_php는 아직 서빙 경로로 인식하지 못합니다. 이때는 경로 0개로 끝나며 종료 코드 2를 돌려줍니다.
+- 공식 Docker `php:*-apache` 이미지는 `php_version.h`로 버전을 읽어 인식하지만, 공식 `php:*-fpm` 이미지(`/usr/local/etc/php`)와 RHEL의 mod_php는 아직 서빙 경로로 인식하지 못합니다. 이때는 경로 0개로 끝나며 종료 코드 2를 돌려줍니다.
 - 한 FPM pool에 여러 웹서버 설정이 연결되면 nginx `PHP_VALUE`를 합쳐서 판정합니다.
 - `--root` 분석에서 디렉터리 자체가 절대경로 심링크이면 glob이 사본 밖을 볼 수 있습니다.
 - RHEL 계열은 패키지 버전을 확인하지 못합니다. php-cgi, LiteSpeed, FrankenPHP는 점검하지 않습니다.
@@ -180,11 +181,44 @@ CI나 스크립트에서 `1`을 실패 조건으로 쓸 수 있습니다. `3`은
 
 운영 환경에서는 프록시/로드밸런서가 버전을 숨길 수 있고, 배포판 백포트·SAPI·`session.upload_progress`·`fatal_error_backtraces`는 원격 GET만으로 확인할 수 없습니다. 배포판 패키지(예: `8.2.7-1+deb12u5`)는 버전 번호가 낮아도 백포트로 수정됐을 수 있으므로 `likely_vulnerable`은 changelog로 확인하십시오. 따라서 `not_vulnerable_by_version`은 패치 적용 확인의 보조 신호이며, 최종 판단은 서버 인벤토리와 패키지 변경 이력으로 하십시오. 자사 또는 명시적으로 허가받은 시스템에만 실행하십시오.
 
+## 검증 랩 (`lab/`)
+
+PHP 버전·SAPI·패키지 배치·완화 상태가 다른 8개 사이트를 Docker로 띄워 두 점검기를 함께 돌립니다. 사이트는 `index.php` 하나뿐이며 `127.0.0.1`에만 바인딩하고, 공격 요청은 보내지 않습니다. 접속 포트는 PHP 버전입니다(7.2.34 → `7234`).
+
+```bash
+cd lab
+./run.sh                 # Windows Git Bash: PYTHON=python ./run.sh
+cat out/summary.txt      # 사이트별 원격 판정과 내부 점검 요약
+docker compose down
+```
+
+| 포트 | 구성 | 확인하는 것 |
+|---|---|---|
+| 7224 | Ubuntu 18.04 · PHP 7.2.24 · nginx+FPM | 패치가 없는 EOL 브랜치, Python 3.6 환경 |
+| 7234 | 공식 `php:7.2.34-fpm` · nginx | 7.2 마지막 릴리스, 공식 이미지 배치 |
+| 7403 | Ubuntu 20.04 · PHP 7.4.3 · `.user.ini` 완화 | 소스 백포트만 있는 브랜치, 효과 없는 완화 검출 |
+| 8102 | Ubuntu 22.04 · PHP 8.1.2 · mod_php | 배포판 백포트 판별(원격은 취약, 내부는 패치됨) |
+| 8306 | Ubuntu 24.04 · PHP 8.3.6 · pool 완화 | 배포판 백포트, `php_admin_value` 완화 |
+| 8336 | 공식 `php:8.3.36-fpm` · nginx | 수정 버전, 공식 이미지 배치 |
+| 8426 / 8427 | 공식 `php:8.4.26/27-apache` | 수정 직전·직후 mod_php |
+
+[docs/sample-report/](docs/sample-report/)는 이 랩의 한 사이트에서 생성한 실제 보고서입니다.
+
 ## 만든 사람
 
 Kevin Hwang. 파이썬을 쓰고·실행하고·자동으로 돌리는 학습용 Windows 데스크톱 앱
 [PyAutoFlow](https://pyautoflow.com/)도 만들고 있습니다.
 
+## 인용·보도 시 출처 표기 요청
+
+기사·블로그·발표 자료에서 이 저장소나 보고서 예시를 소개할 때는 아래 형식으로 출처를 밝혀 주시기 바랍니다. 보도·인용에 대해서는 법적 의무가 아닌 요청입니다. 문서를 복제·각색하는 경우에는 [CC BY 4.0](LICENSE-docs.md)에 따라 저작자 표시가 필요합니다.
+
+> 출처: php2shell-check — Kevin Hwang (https://github.com/neoqmin/php2shell)
+> 개발자는 파이썬 학습·자동화 데스크톱 앱 PyAutoFlow(https://pyautoflow.com/)를 만들고 있습니다.
+
 ## 라이선스
 
-[MIT](LICENSE). 사용 조건과 책임 제한은 [LEGAL.md](LEGAL.md)를 함께 보십시오.
+- 코드(`*.py`, `lab/`): [MIT](LICENSE)
+- 문서(`README.md`, `LEGAL.md`, 기준 문서, `docs/`): [CC BY 4.0](LICENSE-docs.md) — 복제·각색 시 저작자 표시 필요
+
+사용 조건과 책임 제한은 [LEGAL.md](LEGAL.md)를 함께 보십시오.

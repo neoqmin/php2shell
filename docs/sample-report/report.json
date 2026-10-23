@@ -1,0 +1,307 @@
+{
+  "project": "php7403-u20-fpm-userini",
+  "tool": "php2shell_host.py v1.0",
+  "generated_at": "2026-10-23 04:09:25",
+  "basis": "PHP_취약점_동향_2026-10.md",
+  "summary": {
+    "units": 1,
+    "findings": 2,
+    "reachable": 1,
+    "mitigated": 0,
+    "undetermined": 1,
+    "patched": 0,
+    "eol_units": [],
+    "compromise_checks": 1
+  },
+  "units": [
+    {
+      "id": "U01",
+      "label": "PHP 7.4 FPM pool [www]",
+      "sapi": "fpm",
+      "branch": "7.4",
+      "package": "php7.4-fpm",
+      "package_version": "7.4.3-4ubuntu2.29",
+      "version": "7.4.3",
+      "version_source": "dpkg: php7.4-fpm 7.4.3-4ubuntu2.29",
+      "version_status": "backport_only",
+      "version_detail": "PHP 7.4는 공식 수정 릴리스가 없고 소스 백포트만 있습니다(PHP_취약점_동향_2026-10.md:69). changelog(/usr/share/doc/php7.4-fpm/changelog.Debian.gz)에 CVE 백포트 기록 없음.",
+      "pool": "www",
+      "listen": "/run/php/php7.4-fpm.sock",
+      "running": true,
+      "started_at": "2026-10-23 02:42:03",
+      "frontends": [
+        {
+          "kind": "nginx",
+          "names": [
+            "lab-php7.4.localhost"
+          ],
+          "location": "/etc/nginx/sites-enabled/default:1",
+          "route": "location ~ \\.php$ (/etc/nginx/sites-enabled/default:7)",
+          "roots": [
+            "/var/www/html"
+          ]
+        }
+      ],
+      "settings": {
+        "memory_limit": {
+          "key": "memory_limit",
+          "value": "128M",
+          "origin": "php.ini",
+          "location": "/etc/php/7.4/fpm/php.ini:409",
+          "locked": false
+        },
+        "post_max_size": {
+          "key": "post_max_size",
+          "value": "8M",
+          "origin": "php.ini",
+          "location": "/etc/php/7.4/fpm/php.ini:694",
+          "locked": false
+        },
+        "upload_max_filesize": {
+          "key": "upload_max_filesize",
+          "value": "2M",
+          "origin": "php.ini",
+          "location": "/etc/php/7.4/fpm/php.ini:846",
+          "locked": false
+        },
+        "session.upload_progress.enabled": {
+          "key": "session.upload_progress.enabled",
+          "value": "1",
+          "origin": "default",
+          "location": "PHP 기본값",
+          "locked": false
+        },
+        "expose_php": {
+          "key": "expose_php",
+          "value": "On",
+          "origin": "php.ini",
+          "location": "/etc/php/7.4/fpm/php.ini:379",
+          "locked": false
+        },
+        "fatal_error_backtraces": {
+          "key": "fatal_error_backtraces",
+          "value": "1",
+          "origin": "default",
+          "location": "PHP 기본값",
+          "locked": false
+        }
+      },
+      "notes": []
+    }
+  ],
+  "items": [
+    {
+      "id": "F01",
+      "cve": "CVE-2026-109618",
+      "unit": "U01",
+      "component": "php7.4-fpm · PHP 7.4 FPM pool [www]",
+      "severity": "CVSS v4.0 9.2",
+      "fixed_version": "없음(EOL)",
+      "verdict": "undetermined",
+      "verdict_ko": "판정보류",
+      "confidence": "medium",
+      "condition": "SAPI=fpm, memory_limit=128M (/etc/php/7.4/fpm/php.ini:409)",
+      "rationale": "FPM은 startup 실패 시 워커를 종료해 이 경로가 차단되지만, startup 이후 취약할 수 있다는 분석이 있어 도달불가로 단정할 수 없습니다(DOC:44).",
+      "evidence_path": [
+        "nginx lab-php7.4.localhost (/etc/nginx/sites-enabled/default:1)",
+        "location ~ \\.php$ (/etc/nginx/sites-enabled/default:7)",
+        "→ unix:/run/php/php7.4-fpm.sock",
+        "FPM pool [www] (/etc/php/7.4/fpm/pool.d/www.conf:4) listen=/run/php/php7.4-fpm.sock",
+        "PHP 7.4.3 (dpkg: php7.4-fpm 7.4.3-4ubuntu2.29)",
+        "multipart 파싱 중 memory_limit 초과 → 부분 초기화 데이터 정리"
+      ],
+      "notes": []
+    },
+    {
+      "id": "F02",
+      "cve": "CVE-2026-109619",
+      "unit": "U01",
+      "component": "php7.4-fpm · PHP 7.4 FPM pool [www]",
+      "severity": "CVSS v4.0 9.2",
+      "fixed_version": "없음(EOL)",
+      "verdict": "reachable",
+      "verdict_ko": "도달가능",
+      "confidence": "high",
+      "condition": "SAPI=fpm, session.upload_progress.enabled=1 (PHP 기본값)",
+      "rationale": "session.upload_progress가 활성(PHP 기본값)이라 session_start() 없이도 세션 라이프사이클 경로가 성립합니다. mod_php·FPM 모두 해당(DOC:54).",
+      "evidence_path": [
+        "nginx lab-php7.4.localhost (/etc/nginx/sites-enabled/default:1)",
+        "location ~ \\.php$ (/etc/nginx/sites-enabled/default:7)",
+        "→ unix:/run/php/php7.4-fpm.sock",
+        "FPM pool [www] (/etc/php/7.4/fpm/pool.d/www.conf:4) listen=/run/php/php7.4-fpm.sock",
+        "PHP 7.4.3 (dpkg: php7.4-fpm 7.4.3-4ubuntu2.29)",
+        "fatal error로 정리 중단 → 같은 워커의 다음 요청이 stale state 소비"
+      ],
+      "notes": [
+        "session.upload_progress.enabled=0 (/var/www/html/.user.ini:1) — .user.ini/ini_set은 적용 시점이 늦어 효과가 없습니다(DOC:108)."
+      ]
+    }
+  ],
+  "remediation": [
+    {
+      "priority": "now",
+      "title": "PHP 7.4: 패키지 공급원에 백포트 여부 확인",
+      "problem": "PHP 7.4는 공식 수정 릴리스가 없고 소스 백포트만 있습니다(PHP_취약점_동향_2026-10.md:69). changelog(/usr/share/doc/php7.4-fpm/changelog.Debian.gz)에 CVE 백포트 기록 없음.",
+      "current": "php7.4-fpm 7.4.3-4ubuntu2.29",
+      "location": "배포판 공식 패키지",
+      "fix": "패키지 공급원의 보안 업데이트를 확인하고, 없으면 지원 브랜치로 이전합니다.",
+      "verify": "zcat /usr/share/doc/php7.4-fpm/changelog.Debian.gz | grep -E 'CVE-2026-109618|CVE-2026-109619'",
+      "impact": "",
+      "refs": "PHP_취약점_동향_2026-10.md:69",
+      "units": [
+        "U01"
+      ]
+    },
+    {
+      "priority": "temp",
+      "title": "CVE-2026-109619 임시 완화: session.upload_progress 비활성화",
+      "problem": "기본 활성 상태의 upload progress가 stale state 소비 경로를 엽니다.",
+      "current": "session.upload_progress.enabled=1 (PHP 기본값)",
+      "location": "/etc/php/7.4/fpm/pool.d/www.conf",
+      "fix": "/etc/php/7.4/fpm/pool.d/www.conf 의 [www] 섹션에 추가:\nphp_admin_value[session.upload_progress.enabled] = 0\n※ ini_set()·.user.ini로는 효과 없음",
+      "verify": "sudo systemctl restart php7.4-fpm\nsudo python3 php2shell_host.py  # 재점검으로 판정 변화 확인",
+      "impact": "세션 기반 업로드 진행률 표시 기능이 동작하지 않습니다.",
+      "refs": "PHP_취약점_동향_2026-10.md:54, :108",
+      "units": [
+        "U01"
+      ]
+    },
+    {
+      "priority": "temp",
+      "title": "CVE-2026-109618 임시 완화: memory_limit 잠금 + 요청 크기 제한",
+      "problem": "multipart 파싱 중 memory_limit 초과로 부분 초기화된 요청 데이터가 정리되며 메모리 손상이 일어납니다.",
+      "current": "memory_limit=128M (/etc/php/7.4/fpm/php.ini:409)\npost_max_size=8M (/etc/php/7.4/fpm/php.ini:694)\nupload_max_filesize=2M (/etc/php/7.4/fpm/php.ini:846)\nnginx client_max_body_size=1m(기본값) (/etc/nginx/sites-enabled/default:1)",
+      "location": "/etc/php/7.4/fpm/pool.d/www.conf",
+      "fix": "/etc/php/7.4/fpm/pool.d/www.conf 의 [www] 섹션에 추가:\nphp_admin_value[memory_limit] = -1\n\nmemory_limit=-1은 요청별 상한을 없애므로 서비스 단위 메모리 상한을 함께 둡니다:\nsudo systemctl edit php7.4-fpm\n  [Service]\n  MemoryMax=<서버 메모리에 맞는 값>\n(RLIMIT_AS/RLIMIT_DATA는 사용하지 않습니다)",
+      "verify": "sudo systemctl restart php7.4-fpm\nsudo python3 php2shell_host.py  # 재점검으로 판정 변화 확인",
+      "impact": "앱이 multipart를 쓰지 않으면 웹서버 앞단에서 multipart 요청 자체를 차단하는 것이 가장 확실합니다(DOC:105).",
+      "refs": "PHP_취약점_동향_2026-10.md:101-105",
+      "units": [
+        "U01"
+      ]
+    },
+    {
+      "priority": "temp",
+      "title": "효과 없는 완화 설정 정리",
+      "problem": "이 위치의 설정은 요청 파싱 이후 적용되어 효과가 없습니다.",
+      "current": "session.upload_progress.enabled=0 (/var/www/html/.user.ini:1)",
+      "location": "/var/www/html/.user.ini:1",
+      "fix": "해당 줄을 제거하고 pool/php.ini 수준 설정으로 옮깁니다.",
+      "verify": "sudo python3 php2shell_host.py  # 재점검으로 판정 변화 확인",
+      "impact": "",
+      "refs": "PHP_취약점_동향_2026-10.md:108",
+      "units": [
+        "U01"
+      ]
+    },
+    {
+      "priority": "hygiene",
+      "title": "PHP 버전 헤더 노출 차단(expose_php)",
+      "problem": "X-Powered-By로 PHP 버전이 공개되어 공격 대상 선별에 쓰입니다.",
+      "current": "expose_php=On (/etc/php/7.4/fpm/php.ini:379)",
+      "location": "/etc/php/7.4/fpm/php.ini:379",
+      "fix": "/etc/php/7.4/fpm/php.ini:379: expose_php = Off",
+      "verify": "sudo systemctl restart php7.4-fpm\ncurl -sI https://<호스트>/ | grep -i x-powered-by   # 출력이 없어야 함",
+      "impact": "",
+      "refs": "",
+      "units": [
+        "U01"
+      ]
+    },
+    {
+      "priority": "check",
+      "title": "침해 징후 확인: 2026-10-17 이후 변경된 .php 파일",
+      "problem": "배포에 의한 정상 변경일 수 있습니다. 배포 이력과 대조해 설명되지 않는 파일을 확인합니다.",
+      "current": "1개",
+      "location": "/var/www/html",
+      "fix": "2026-10-23 01:52  /var/www/html/index.php",
+      "verify": "find /var/www/html -name '*.php' -newermt 2026-10-17 -ls",
+      "impact": "",
+      "refs": "",
+      "units": []
+    }
+  ],
+  "log_hits": [],
+  "remote": [
+    {
+      "target": "http://127.0.0.1:7403/",
+      "status": "likely_vulnerable",
+      "reason": "PHP 7.4.3은 공식 수정 릴리스가 없는 지원 종료(EOL) 브랜치입니다. 벤더 백포트 적용 여부를 확인해야 합니다.",
+      "http_status": 200,
+      "detected_version": "7.4.3",
+      "version_source": "X-Powered-By",
+      "server": "nginx/1.18.0 (Ubuntu)",
+      "powered_by": "PHP/7.4.3-4ubuntu2.29",
+      "final_url": "http://127.0.0.1:7403/",
+      "redirects": 0,
+      "notes": [
+        "비파괴적 GET 요청만 수행했습니다.",
+        "버전 판정만으로 실제 도달 가능성이나 배포판 백포트를 확정할 수 없습니다."
+      ]
+    }
+  ],
+  "transparency": {
+    "files_read": [
+      "/etc/hostname",
+      "/proc/stat",
+      "/var/lib/dpkg/status",
+      "/etc/nginx/nginx.conf",
+      "/etc/nginx/modules-enabled/50-mod-http-image-filter.conf",
+      "/etc/nginx/modules-enabled/50-mod-http-xslt-filter.conf",
+      "/etc/nginx/modules-enabled/50-mod-mail.conf",
+      "/etc/nginx/modules-enabled/50-mod-stream.conf",
+      "/etc/nginx/mime.types",
+      "/etc/nginx/sites-enabled/default",
+      "/etc/nginx/snippets/fastcgi-php.conf",
+      "/etc/nginx/fastcgi.conf",
+      "/etc/php/7.4/fpm/php.ini",
+      "/etc/php/7.4/fpm/conf.d/10-opcache.ini",
+      "/etc/php/7.4/fpm/conf.d/10-pdo.ini",
+      "/etc/php/7.4/fpm/conf.d/20-calendar.ini",
+      "/etc/php/7.4/fpm/conf.d/20-ctype.ini",
+      "/etc/php/7.4/fpm/conf.d/20-exif.ini",
+      "/etc/php/7.4/fpm/conf.d/20-ffi.ini",
+      "/etc/php/7.4/fpm/conf.d/20-fileinfo.ini",
+      "/etc/php/7.4/fpm/conf.d/20-ftp.ini",
+      "/etc/php/7.4/fpm/conf.d/20-gettext.ini",
+      "/etc/php/7.4/fpm/conf.d/20-iconv.ini",
+      "/etc/php/7.4/fpm/conf.d/20-json.ini",
+      "/etc/php/7.4/fpm/conf.d/20-phar.ini",
+      "/etc/php/7.4/fpm/conf.d/20-posix.ini",
+      "/etc/php/7.4/fpm/conf.d/20-readline.ini",
+      "/etc/php/7.4/fpm/conf.d/20-shmop.ini",
+      "/etc/php/7.4/fpm/conf.d/20-sockets.ini",
+      "/etc/php/7.4/fpm/conf.d/20-sysvmsg.ini",
+      "/etc/php/7.4/fpm/conf.d/20-sysvsem.ini",
+      "/etc/php/7.4/fpm/conf.d/20-sysvshm.ini",
+      "/etc/php/7.4/fpm/conf.d/20-tokenizer.ini",
+      "/etc/php/7.4/fpm/php-fpm.conf",
+      "/etc/php/7.4/fpm/pool.d/www.conf",
+      "/var/www/html/.user.ini",
+      "/var/www/html/index.php",
+      "/var/log/php7.4-fpm.log",
+      "/var/log/nginx/error.log",
+      "/usr/share/doc/php7.4-fpm/changelog.Debian.gz"
+    ],
+    "files_denied": [],
+    "commands_executed": 0,
+    "network_requests": 0,
+    "writes": [
+      "/tmp/php2shell_report"
+    ],
+    "root": "/",
+    "limits": {
+      "conf_bytes": 4194304,
+      "log_tail_bytes": 16777216,
+      "php_file_bytes": 524288,
+      "walk_files": 50000
+    },
+    "webroot_scans": [
+      {
+        "root": "/var/www/html",
+        "files_seen": 3,
+        "truncated": false
+      }
+    ]
+  }
+}
