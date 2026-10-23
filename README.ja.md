@@ -31,6 +31,10 @@ sudo python3 php2shell_host.py
 python3 php2shell_remote.py https://example.com/ --json > remote.json
 sudo python3 php2shell_host.py --remote-json remote.json
 
+# 英語・日本語のレポート（リモート点検も同じ言語で実行）
+python3 php2shell_remote.py https://example.com/ --json --lang ja > remote.json
+sudo python3 php2shell_host.py --remote-json remote.json --lang ja
+
 # Webサーバー設定にないwebrootを追加し、レポートの保存先を指定
 sudo python3 php2shell_host.py --webroot /srv/app --out /tmp/php2shell_report
 
@@ -45,10 +49,11 @@ python3 php2shell_host.py --root /mnt/server-copy
 | `--webroot` | なし | 追加で検査するwebroot（繰り返し指定可能） |
 | `--remote-json` | なし | `php2shell_remote.py --json` の結果（繰り返し指定可能） |
 | `--since` | `2026-10-17` | この日付以降に変更された `.php` を侵害確認項目として表示（最初の攻撃観測日） |
+| `--lang` | `ko` | レポート・画面出力の言語（`ko`・`en`・`ja`）。レポートはリモート結果の理由文をそのまま引用するため、`php2shell_remote.py` も同じ `--lang` で実行してください。 |
 
 ### 成果物
 
-`report.json`（機械可読）、`report_ko.md`（メール・Issue添付用）、`report.html`（A4印刷用）。レポート構成：サマリー → 点検対象（サービング経路）→ CVE別の判定と根拠経路 → 対処事項（ファイル・行単位、確認コマンド、影響）→ 侵害の痕跡（要確認）→ 透明性付録。
+`report.json`（機械可読）、`report_<lang>.md`（メール・Issue添付用）、`report_<lang>.html`（A4印刷用）。`<lang>` は `--lang` の値です。`report.json` のコード値（`verdict`、`priority`、`version_status` など）は言語に依存せず、説明文（`rationale`、`notes` など）は `--lang` の言語で記録されます。互換性のため判定ラベルのフィールド名は `verdict_ko` のままで、値は `--lang` の言語です。根拠ドキュメントの引用（`DOC:NN`）は言語別の翻訳版を指し、翻訳版は原文と行番号が同じです。レポート構成：サマリー → 点検対象（サービング経路）→ CVE別の判定と根拠経路 → 対処事項（ファイル・行単位、確認コマンド、影響）→ 侵害の痕跡（要確認）→ 透明性付録。
 
 ### 判定
 
@@ -94,6 +99,7 @@ python3 php2shell_remote.py <URL> [--timeout 秒] [--max-bytes バイト] [--caf
 | `--cafile` | なし | システム信頼ストアに**追加で**信頼する CA／中間 CA 証明書ファイル。PEM・DER のいずれも可能。検証は維持されます。 |
 | `--insecure` | オフ | HTTPS 証明書・ホスト名の検証を省略します。プライベート証明書を使う内部テストサーバーにのみ使用してください。`--cafile` より優先されます。 |
 | `--json` | オフ | 結果を JSON で出力します。 |
+| `--lang` | `ko` | `reason`・`notes`・画面出力の言語（`ko`・`en`・`ja`）。`status` は言語に依存しないコード値です。 |
 
 ### 例
 
@@ -141,10 +147,10 @@ Windows で日本語（文字）が化ける場合は、`PYTHONIOENCODING=utf-8`
 理由: PHP 8.2.10 はドキュメントの修正バージョン 8.2.35 未満です。
 HTTP: 403
 X-Powered-By: PHP/8.2.10
-PHP: 8.2.10 (出所: X-Powered-By)
-- 非破壊的な GET リクエストのみを実行しました。
-- バージョン判定だけでは実際の到達可能性やディストリビューションのバックポートは確定できません。
-- HTTP エラー応答（403 Forbidden）のヘッダーで判定しました。
+PHP: 8.2.10（出典: X-Powered-By）
+- 非破壊的なGETリクエストのみを実行しました。
+- バージョン判定だけでは、実際の到達可能性やディストリのバックポートを確定できません。
+- HTTPエラー応答（403 Forbidden）のヘッダーで判定しました。
 ```
 
 JSON 出力フィールド：`target`、`status`、`reason`、`http_status`、`detected_version`、`version_source`、`server`、`powered_by`、`final_url`、`redirects`、`notes`。
@@ -190,6 +196,7 @@ PHP バージョン・SAPI・パッケージ構成・緩和状態が異なる8�
 ```bash
 cd lab
 ./run.sh                 # Windows Git Bash: PYTHON=python ./run.sh
+REPORT_LANG=ja ./run.sh  # 日本語（ja）・英語（en）出力で実行
 cat out/summary.txt      # サイト別のリモート判定と内部点検サマリー
 docker compose down
 ```
@@ -204,7 +211,9 @@ docker compose down
 | 8336 | 公式 `php:8.3.36-fpm` · nginx | 修正バージョン、公式イメージ構成 |
 | 8426 / 8427 | 公式 `php:8.4.26/27-apache` | 修正直前・直後の mod_php |
 
-[docs/sample-report/](docs/sample-report/) は、このラボの1サイトで生成した実際のレポートです。
+[docs/sample-report/](docs/sample-report/) は、このラボの1サイト（7403）で生成した実際のレポートです（`report_ko`・`report_en`・`report_ja` の `.md`/`.html`、`report.json` は ko）。
+
+メッセージカタログを変更したら、`python lab/check_i18n.py` で3言語のキー・placeholder の一致を確認してください。
 
 ## 作者
 

@@ -8,9 +8,11 @@ partially (no package version).
 
 For every serving path (web server -> SAPI/FPM pool -> PHP build) it decides
 whether the preconditions of CVE-2026-109618 / CVE-2026-109619 hold, and writes
-an administrator report: report.json, report_ko.md, report.html.
+an administrator report: report.json, report_<lang>.md, report_<lang>.html.
 
 Basis: PHP_취약점_동향_2026-10.md §2 (line numbers are cited in the report).
+Report language: --lang ko|en|ja. Codes in report.json (verdict, priority, status)
+are language neutral; prose fields follow --lang.
 Exit codes: 0 = nothing reachable or undetermined, 1 = at least one reachable finding,
 2 = error or no PHP serving path found, 3 = no reachable finding but some undetermined.
 """
@@ -33,7 +35,33 @@ from typing import Dict, Iterator, List, Optional, Tuple
 from urllib.parse import urlparse
 
 VERSION = "1.0"
-DOC = "PHP_취약점_동향_2026-10.md"
+# The translations keep the original's line numbering, so DOC:NN citations hold in every language.
+DOC_FILES = {
+    "ko": "PHP_취약점_동향_2026-10.md",
+    "en": "PHP_취약점_동향_2026-10.en.md",
+    "ja": "PHP_취약점_동향_2026-10.ja.md",
+}
+DOC = DOC_FILES["ko"]
+
+# --- i18n -------------------------------------------------------------------
+# Every user-facing sentence lives in MESSAGES (end of file), keyed by meaning. Strings are
+# translated where they are produced, so findings and report.json carry the --lang text.
+# Comparisons between strings produced in the same run stay valid; nothing compares against
+# a translated literal.
+LANGS = ("ko", "en", "ja")
+LANG = "ko"
+
+
+def t(key: str, **kw) -> str:
+    """Message in the current language; falls back to ko, then to the key (never crashes)."""
+    s = MESSAGES.get(LANG, {}).get(key) or MESSAGES["ko"].get(key, key)
+    return s.format(**kw)
+
+
+def set_lang(lang: str) -> None:
+    global LANG, DOC
+    LANG = lang if lang in LANGS else "ko"
+    DOC = DOC_FILES[LANG]
 
 # Same table as php2shell_remote.py (PHP2Shell fixed releases, DOC §2.3).
 FIXED = {
@@ -58,13 +86,8 @@ DEFAULTS = {
 }
 WATCHED = tuple(DEFAULTS)
 
-VERDICT_KO = {
-    "reachable": "도달가능",
-    "mitigated": "완화됨(임시)",
-    "undetermined": "판정보류",
-    "patched": "패치됨",
-}
-PRIO_KO = {"now": "즉시", "temp": "임시 완화", "hygiene": "정비", "check": "확인 필요"}
+VERDICTS = ("reachable", "mitigated", "undetermined", "patched")
+PRIORITIES = ("now", "temp", "hygiene", "check")
 
 MAX_CONF_BYTES = 4 * 1024 * 1024
 MAX_LOG_BYTES = 16 * 1024 * 1024
@@ -236,7 +259,7 @@ class Setting:
     key: str
     value: str
     origin: str      # default | php.ini | pool | nginx | apache
-    location: str    # file:line, or "PHP 기본값"
+    location: str    # file:line, or t("loc.default") (must not contain ":")
     locked: bool = False  # php_admin_* (cannot be overridden by the app)
 
 
@@ -247,7 +270,7 @@ class Layer:
 
 
 def resolve(layers: List[Layer]) -> Tuple[Dict[str, Setting], List[str]]:
-    eff = {k: Setting(k, v, "default", "PHP 기본값") for k, v in DEFAULTS.items()}
+    eff = {k: Setting(k, v, "default", t("loc.default")) for k, v in DEFAULTS.items()}
     notes: List[str] = []
     for layer in layers:
         for s in layer.entries:
@@ -255,7 +278,7 @@ def resolve(layers: List[Layer]) -> Tuple[Dict[str, Setting], List[str]]:
                 continue
             cur = eff[s.key]
             if cur.locked and not s.locked:
-                notes.append(f"{s.location}의 {s.key}={s.value}는 {cur.location}의 php_admin 값에 막혀 무시됩니다.")
+                notes.append(t("note.admin_override", loc=s.location, key=s.key, value=s.value, admin_loc=cur.location))
                 continue
             eff[s.key] = s
     return eff, notes
@@ -501,7 +524,7 @@ def _walk_server(node: NDir, chain: List[NDir], upstreams, fronts: List[Frontend
             _walk_server(d, chain + [d], upstreams, fronts)
         if d.name != "fastcgi_pass" or not d.args:
             continue
-        names = next((x.args for x in srv.block or [] if x.name == "server_name"), []) or ["(server_name 없음)"]
+        names = next((x.args for x in srv.block or [] if x.name == "server_name"), []) or [t("fe.no_server_name")]
         root = _nearest(chain, "root")
         body = _nearest(chain, "client_max_body_size")
         fe = Frontend(
@@ -566,7 +589,7 @@ def parse_apache(host: Host) -> ApacheInfo:
     if info.global_guarded and mod_php:
         info.global_target, info.global_route = None, ""
     if not info.vhosts and info.found:
-        info.vhosts.append(Frontend("apache", ["(전역)"], "apache 전역 설정", info.global_route or "전역",
+        info.vhosts.append(Frontend("apache", [t("fe.global_name")], t("fe.global_loc"), info.global_route or t("fe.global_route"),
                                     None, list(info.global_roots)))
     for vh in info.vhosts:
         if vh.target is None and info.global_target:
@@ -671,8 +694,8 @@ def package_origin(deb_version: str) -> str:
     if "sury" in deb_version:
         return "Ondřej Surý PPA (deb.sury.org)"
     if re.search(r"ubuntu|deb\d+u|\+deb", deb_version):
-        return "배포판 공식 패키지"
-    return "출처 미상"
+        return t("pkg.distro")
+    return t("pkg.unknown_origin")
 
 
 def changelog_has_fix(host: Host, pkgs: List[str]) -> Tuple[Optional[bool], Optional[str]]:
@@ -738,6 +761,7 @@ class Unit:
     package_version: Optional[str] = None
     version: Optional[str] = None
     version_source: Optional[str] = None
+    version_remote: bool = False    # version borrowed from a remote response header
     pool: Optional[Pool] = None
     frontends: List[Frontend] = field(default_factory=list)
     layers: List[Layer] = field(default_factory=list)
@@ -825,7 +849,7 @@ def build_units(host: Host, pkgs: Dict[str, str], procs: Optional[List[Proc]],
         if header_version:
             u.package, u.service = None, ""
             u.version = header_version
-            u.version_source = "헤더 파일 /usr/local/include/php/main/php_version.h (공식 Docker 이미지)"
+            u.version_source = t("vsrc.header", path="/usr/local/include/php/main/php_version.h")
         units.append(u)
 
     # Apache proxy_fcgi vhosts route to FPM pools like nginx does.
@@ -905,10 +929,11 @@ LOG_GLOBS = [
     "/var/log/apache2/error.log*", "/var/log/httpd/error_log*",
     "/var/log/syslog*", "/var/log/kern.log*", "/var/log/messages*",
 ]
+# Keys are category codes; the report shows t("log.<code>").
 LOG_PATTERNS = {
-    "워커 비정상 종료(signal)": re.compile(r"exited on signal (?:11|6|7|4)\b|SIGSEGV|SIGBUS|SIGABRT", re.I),
-    "PHP 프로세스 segfault": re.compile(r"(?:php|php-fpm|apache2|httpd)\S*\[\d+\]: segfault at|segfault at \S+ .* in (?:php|libphp)", re.I),
-    "메모리 한도 초과 fatal": re.compile(r"Allowed memory size of \d+ bytes exhausted", re.I),
+    "signal": re.compile(r"exited on signal (?:11|6|7|4)\b|SIGSEGV|SIGBUS|SIGABRT", re.I),
+    "segfault": re.compile(r"(?:php|php-fpm|apache2|httpd)\S*\[\d+\]: segfault at|segfault at \S+ .* in (?:php|libphp)", re.I),
+    "oom": re.compile(r"Allowed memory size of \d+ bytes exhausted", re.I),
 }
 
 
@@ -933,12 +958,12 @@ def scan_logs(host: Host) -> List[LogHit]:
                 continue
             # System-wide logs only count kernel segfault lines; signal/OOM wording there is unrelated noise.
             system_log = any(x in path for x in ("syslog", "kern.log", "messages"))
-            for cat, rx in LOG_PATTERNS.items():
-                if system_log and not cat.startswith("PHP 프로세스"):
+            for code, rx in LOG_PATTERNS.items():
+                if system_log and code != "segfault":
                     continue
                 matched = [ln for ln in text.splitlines() if rx.search(ln)]
                 if matched:
-                    hits.append(LogHit(path, cat, len(matched), [m[:240] for m in matched[-3:]]))
+                    hits.append(LogHit(path, t("log." + code), len(matched), [m[:240] for m in matched[-3:]]))
     return hits
 
 
@@ -986,30 +1011,30 @@ def parse_version(v: str) -> Tuple[int, ...]:
     return tuple(int(x) for x in v.split("."))
 
 
-def version_status(u: Unit, host: Host) -> Tuple[str, str]:
-    """Returns (status, explanation). status: patched | vulnerable | eol | backport_only | unknown."""
+def version_status(u: Unit, host: Host) -> Tuple[str, str, bool]:
+    """Returns (status, explanation, by_version). status: patched | vulnerable | eol | backport_only | unknown.
+
+    by_version is True when "patched" rests on a version comparison rather than a changelog entry.
+    """
     if u.branch is None:
-        return "unknown", "PHP 버전을 확인하지 못했습니다(RHEL 계열 또는 패키지 정보 없음)."
+        return "unknown", t("vs.no_branch"), False
     fixed = FIXED.get(u.branch)
     if u.version and fixed and parse_version(u.version) >= fixed:
-        return "patched", f"{u.version} ≥ 수정 버전 {'.'.join(map(str, fixed))}"
+        return "patched", t("vs.patched", version=u.version, fixed=".".join(map(str, fixed))), True
     pkgs = [p for p in (u.package, f"php{u.branch_str}-common") if p]
     has_fix, path = changelog_has_fix(host, pkgs)
     if has_fix:
-        return "patched", f"패키지 changelog({path})에 {', '.join(CVES)} 백포트 기록이 있습니다."
-    cl = f" changelog({path})에 CVE 백포트 기록 없음." if has_fix is False else ""
+        return "patched", t("vs.changelog_fix", path=path, cves=", ".join(CVES)), False
+    cl = t("vs.changelog_none", path=path) if has_fix is False else ""
     if u.branch < (7, 4):
-        return "eol", f"PHP {u.branch_str}는 EOL이며 PHP2Shell 패치가 존재하지 않습니다(소스 백포트 없음, {DOC}:70).{cl}"
+        return "eol", t("vs.eol", branch=u.branch_str, doc=DOC) + cl, False
     if u.branch in BACKPORT_ONLY:
-        return "backport_only", f"PHP {u.branch_str}는 공식 수정 릴리스가 없고 소스 백포트만 있습니다({DOC}:69).{cl}"
+        return "backport_only", t("vs.backport_only", branch=u.branch_str, doc=DOC) + cl, False
     if fixed is None:
-        return "unknown", f"PHP {u.branch_str}는 수정 기준표에 없는 브랜치입니다."
+        return "unknown", t("vs.unknown_branch", branch=u.branch_str), False
     if not u.version:
-        return "unknown", "패키지 버전을 확인하지 못했습니다."
-    return "vulnerable", f"{u.version} < 수정 버전 {'.'.join(map(str, fixed))}.{cl}"
-
-
-RESTART_NOTE = "설정 파일이 서비스 시작 이후 수정됐습니다. 재시작·리로드로 반영됐는지 확인할 수 없습니다(파일 mtime 기준 추정, DOC:108)."
+        return "unknown", t("vs.no_version"), False
+    return "vulnerable", t("vs.vulnerable", version=u.version, fixed=".".join(map(str, fixed))) + cl, False
 
 
 def pending_restart(u: Unit, host: Host, setting: Setting) -> bool:
@@ -1023,16 +1048,16 @@ def base_path(u: Unit) -> List[str]:
     path = []
     if u.frontends:
         fe = u.frontends[0]
-        more = f" 외 {len(u.frontends) - 1}개" if len(u.frontends) > 1 else ""
+        more = t("path.more", n=len(u.frontends) - 1) if len(u.frontends) > 1 else ""
         path.append(f"{fe.kind} {' '.join(fe.names[:3])} ({fe.location}){more}")
         path.append(fe.route)
         if fe.target:
             path.append(f"→ {fe.target}")
     else:
-        path.append("웹서버 연결 미확인")
+        path.append(t("path.no_frontend"))
     if u.pool:
         path.append(f"FPM pool [{u.pool.name}] ({loc(u.pool.file, u.pool.line)}) listen={u.pool.listen}")
-    path.append(f"PHP {u.version or u.branch_str} ({u.version_source or '버전 출처 없음'})")
+    path.append(f"PHP {u.version or u.branch_str} ({u.version_source or t('path.no_vsrc')})")
     return path
 
 
@@ -1054,7 +1079,7 @@ def is_idle(u: Unit) -> bool:
 
 
 def set_desc(s: Setting) -> str:
-    lock = ", php_admin 잠금" if s.locked else ""
+    lock = t("set.locked") if s.locked else ""
     return f"{s.key}={s.value} ({s.location}{lock})"
 
 
@@ -1062,36 +1087,35 @@ def evaluate(units: List[Unit], webscans: Dict[str, WebrootScan], host: Host) ->
     findings: List[Finding] = []
     vstatus: Dict[str, Tuple[str, str]] = {}
     for u in units:
-        status, vexp = version_status(u, host)
+        status, vexp, by_version = version_status(u, host)
         vstatus[u.id] = (status, vexp)
         comp = f"{u.package or 'php-fpm'} · {u.label}"
-        fixed_str = ".".join(map(str, FIXED[u.branch])) if u.branch in FIXED else "없음(EOL)" if u.branch and u.branch < (8, 2) else "-"
+        fixed_str = (".".join(map(str, FIXED[u.branch])) if u.branch in FIXED
+                     else t("fixed.none_eol") if u.branch and u.branch < (8, 2) else "-")
         scans = [webscans[r] for fe in u.frontends for r in fe.roots if r in webscans]
         user_level = [s for ws in scans for s in ws.user_ini + ws.ini_set if s.origin != ".htaccess"]
         common_notes = []
         if not u.frontends:
-            common_notes.append("이 pool로 요청을 보내는 웹서버 설정을 찾지 못했습니다. 외부 노출 여부는 별도 확인이 필요합니다.")
+            common_notes.append(t("ev.no_frontend"))
         if u.running is False:
-            common_notes.append("점검 시점에 이 서비스 프로세스가 실행 중이 아니었습니다.")
+            common_notes.append(t("ev.not_running"))
         if u.incomplete:
-            common_notes.append("읽지 못한 설정 파일: " + ", ".join(u.incomplete))
+            common_notes.append(t("ev.unreadable", files=", ".join(u.incomplete)))
         common_notes.extend(u.notes)
 
         def add(cve, verdict, conf, condition, rationale, extra_path, notes):
             findings.append(Finding(
-                f"F{len(findings) + 1:02d}", cve, u.id, comp, CVSS, fixed_str, verdict, VERDICT_KO[verdict],
+                f"F{len(findings) + 1:02d}", cve, u.id, comp, CVSS, fixed_str, verdict, t("verdict." + verdict),
                 conf, condition, rationale, base_path(u) + extra_path, notes + common_notes))
 
         if status == "patched":
             for cve in CVES:
-                remote_only = (u.version_source or "").startswith("원격")
-                add(cve, "patched", "high" if "≥" in vexp and not remote_only else "medium", "패치 적용", vexp, [],
-                    ["버전은 원격 응답 헤더 기준입니다. 서버 패키지로 확인하십시오."] if remote_only else [])
+                add(cve, "patched", "high" if by_version and not u.version_remote else "medium",
+                    t("ev.cond_patched"), vexp, [], [t("ev.remote_version")] if u.version_remote else [])
             continue
         if is_idle(u):
             for cve in CVES:
-                add(cve, "undetermined", "medium", f"SAPI={u.sapi}, 서비스 중지·웹서버 연결 없음",
-                    "점검 시점에 요청을 처리하지 않는 설치입니다. 서비스를 시작하면 같은 조건이 적용됩니다.", [], [])
+                add(cve, "undetermined", "medium", t("ev.cond_idle", sapi=u.sapi), t("ev.idle"), [], [])
             continue
 
         conf_floor = "medium" if (not u.frontends or u.incomplete) else "high"
@@ -1103,57 +1127,53 @@ def evaluate(units: List[Unit], webscans: Dict[str, WebrootScan], host: Host) ->
         if ini_bytes(ml.value) == -1 and (ml.locked or not overrides):
             verdict = "mitigated"
             conf = "high" if ml.locked else "low"
-            rationale = f"memory_limit=-1로 OOM 중단 경로가 제거됨({ml.location})."
+            rationale = t("ev18.mitigated", loc=ml.location)
             if not ml.locked:
-                notes.append("php_admin 값이 아니라 앱이 다시 유한값으로 바꿀 수 있습니다(DOC:101).")
+                notes.append(t("ev18.not_locked"))
             if pending_restart(u, host, ml):
                 verdict, conf = "undetermined", "medium"
-                notes.append(RESTART_NOTE)
+                notes.append(t("note.restart"))
         elif u.sapi == "apache2handler":
             verdict, conf = "reachable", conf_floor
-            rationale = "mod_php는 request startup 실패 후에도 cleanup을 수행해 앱 코드 실행 전에 공격이 성립합니다(DOC:43)."
+            rationale = t("ev18.modphp")
         else:
             verdict, conf = "undetermined", "medium"
-            rationale = ("FPM은 startup 실패 시 워커를 종료해 이 경로가 차단되지만, startup 이후 취약할 수 있다는 분석이 있어 "
-                         "도달불가로 단정할 수 없습니다(DOC:44).")
+            rationale = t("ev18.fpm")
         for s in overrides:
-            notes.append(f"앱/디렉터리 수준 memory_limit 변경 발견: {set_desc(s)}")
+            notes.append(t("ev18.override", setting=set_desc(s)))
         if verdict == "mitigated" and u.incomplete:
             verdict, conf = "undetermined", "low"
-            notes.append("읽지 못한 설정 파일이 완화 설정을 덮어쓸 수 있어 완화로 판정하지 않습니다.")
-        add(CVES[0], verdict, conf, f"SAPI={u.sapi}, {set_desc(ml)}", rationale,
-            [f"multipart 파싱 중 memory_limit 초과 → 부분 초기화 데이터 정리"], notes)
+            notes.append(t("ev18.incomplete"))
+        add(CVES[0], verdict, conf, f"SAPI={u.sapi}, {set_desc(ml)}", rationale, [t("ev18.sink")], notes)
 
         # CVE-2026-109619: stale state UAF via session.upload_progress / fatal_error_backtraces (DOC:47-55).
         up = u.settings["session.upload_progress.enabled"]
         notes = []
         for s in user_level:
             if s.key == "session.upload_progress.enabled":
-                notes.append(f"{set_desc(s)} — {s.origin}/ini_set은 적용 시점이 늦어 효과가 없습니다(DOC:108).")
+                notes.append(t("ev19.late", setting=set_desc(s), origin=s.origin))
         fe_bt = u.settings["fatal_error_backtraces"]
         bt_path = (u.sapi == "apache2handler" and u.branch is not None and u.branch >= (8, 5)
                    and ini_bool(fe_bt.value) is not False)
         if ini_bool(up.value) is False and not bt_path:
             verdict, conf = "mitigated", "high"
-            rationale = f"session.upload_progress.enabled=0이 요청 파싱 전 단계에 설정됨({up.location})."
+            rationale = t("ev19.mitigated", loc=up.location)
             if up.origin == "nginx":
                 conf = "medium"
-                notes.append("nginx fastcgi_param PHP_VALUE는 요청 단위로 전달됩니다. pool의 php_admin_value로 옮기는 것을 권장합니다.")
+                notes.append(t("ev19.nginx"))
             if pending_restart(u, host, up):
                 verdict, conf = "undetermined", "medium"
-                notes.append(RESTART_NOTE)
+                notes.append(t("note.restart"))
         else:
             verdict, conf = "reachable", conf_floor
             if bt_path:
-                rationale = f"mod_php + PHP 8.5 + fatal_error_backtraces 활성({fe_bt.location}) 경로가 성립합니다(DOC:53)."
+                rationale = t("ev19.backtraces", loc=fe_bt.location)
             else:
-                rationale = (f"session.upload_progress가 활성({up.location})이라 session_start() 없이도 세션 라이프사이클 "
-                             f"경로가 성립합니다. mod_php·FPM 모두 해당(DOC:54).")
+                rationale = t("ev19.upload_progress", loc=up.location)
         if u.incomplete and (verdict == "mitigated" or (up.origin == "default" and not bt_path)):
             verdict, conf = "undetermined", "low"
-            rationale = "설정 파일 일부를 읽지 못해 실효값을 확정할 수 없습니다."
-        add(CVES[1], verdict, conf, f"SAPI={u.sapi}, {set_desc(up)}", rationale,
-            ["fatal error로 정리 중단 → 같은 워커의 다음 요청이 stale state 소비"], notes)
+            rationale = t("ev19.incomplete")
+        add(CVES[1], verdict, conf, f"SAPI={u.sapi}, {set_desc(up)}", rationale, [t("ev19.sink")], notes)
     return findings, vstatus
 
 
@@ -1176,93 +1196,80 @@ def remediations(units: List[Unit], findings: List[Finding], vstatus, host: Host
 
     for u in units:
         status, vexp = vstatus[u.id]
-        restart = (f"sudo systemctl restart {u.service}" if u.service
-                   else "docker restart <컨테이너>   # 컨테이너라면 이미지 재빌드·재배포가 원칙")
-        recheck = "sudo python3 php2shell_host.py  # 재점검으로 판정 변화 확인"
-        target = (f"{u.pool.file} 의 [{u.pool.name}] 섹션" if u.pool else
-                  "Apache 설정(예: /etc/apache2/conf-available/php2shell.conf, a2enconf로 활성화)")
+        restart = f"sudo systemctl restart {u.service}" if u.service else t("rem.restart_container")
+        recheck = t("rem.recheck")
+        target = t("rem.target_pool", file=u.pool.file, pool=u.pool.name) if u.pool else t("rem.target_apache")
         admin = "php_admin_value[{k}] = {v}" if u.pool else "php_admin_value {k} {v}"
 
         if is_idle(u):
             pass  # covered by the "unused installation" item below
         elif status == "eol":
             add(Remediation(
-                "now", f"PHP {u.branch_str}: 패치가 존재하지 않는 브랜치 — 노출 축소 결정",
+                "now", t("rem.eol.title", branch=u.branch_str),
                 vexp, f"{u.package} {u.package_version or ''}".strip() if u.package else f"PHP {u.version or u.branch_str}",
                 u.version_source or u.package or "-",
-                "업그레이드 일정과 별개로, 그때까지의 노출을 줄이는 결정이 필요합니다.\n"
-                "· 외부 접근 범위 축소(관리 화면·업로드 경로 접근 제한, WAF 적용 여부 확인)\n"
-                "· 아래 임시 완화 항목 전부 적용\n"
-                "· CISA는 패치할 수 없는 시스템의 오프라인 전환을 권고(DOC:114)",
-                "결정 사항과 적용 범위를 기록", "", f"{DOC}:70, :114"), u.id)
+                t("rem.eol.fix"), t("rem.eol.verify"), "", f"{DOC}:70, :114"), u.id)
         elif status == "backport_only":
             add(Remediation(
-                "now", f"PHP {u.branch_str}: 패키지 공급원에 백포트 여부 확인",
+                "now", t("rem.bp.title", branch=u.branch_str),
                 vexp,
                 f"{u.package} {u.package_version or ''}".strip() if u.package else f"PHP {u.version or u.branch_str}",
                 package_origin(u.package_version or "") if u.package else (u.version_source or "-"),
-                "패키지 공급원의 보안 업데이트를 확인하고, 없으면 지원 브랜치로 이전합니다." if u.package else
-                "공식 이미지에는 벤더 백포트가 없습니다. 수정이 포함된 지원 브랜치 태그로 베이스 이미지를 올려 재빌드·재배포합니다.",
+                t("rem.bp.fix_pkg") if u.package else t("rem.bp.fix_image"),
                 f"zcat /usr/share/doc/{u.package}/changelog.Debian.gz | grep -E '{'|'.join(CVES)}'" if u.package else
-                "docker exec <컨테이너> php -v",
+                t("rem.cmd_php_v"),
                 "", f"{DOC}:69"), u.id)
         elif status == "vulnerable":
             add(Remediation(
-                "now", f"{u.package or 'PHP ' + u.branch_str} 보안 업데이트",
+                "now", t("rem.vuln.title", what=u.package or "PHP " + u.branch_str),
                 vexp, u.package_version or u.version or "-", u.version_source or "-",
                 f"sudo apt-get install --only-upgrade {u.package} && {restart}" if u.package else
-                f"베이스 이미지를 수정 버전 이상의 태그(예: php:{'.'.join(map(str, FIXED[u.branch]))}-…)로 올려 다시 빌드·배포",
-                f"dpkg -s {u.package} | grep Version" if u.package else "docker exec <컨테이너> php -v",
+                t("rem.vuln.fix_image", fixed=".".join(map(str, FIXED[u.branch]))),
+                f"dpkg -s {u.package} | grep Version" if u.package else t("rem.cmd_php_v"),
                 "", f"{DOC}:65-68"), u.id)
 
         if status == "patched":
             continue
         if is_idle(u):
             add(Remediation(
-                "hygiene", f"미사용 PHP {u.branch_str} 설치 정리",
-                "실행 중이 아니고 웹서버 연결도 없지만, 시작되면 같은 취약 조건으로 서비스됩니다.",
-                f"{u.package or u.label} {u.package_version or ''} (서비스 중지)".strip(),
+                "hygiene", t("rem.idle.title", branch=u.branch_str), t("rem.idle.problem"),
+                t("rem.idle.current", what=u.package or u.label, version=u.package_version or "").strip(),
                 u.version_source or u.package or (u.pool.file if u.pool else "-"),
-                (f"필요 없으면 제거: sudo apt-get purge {u.package}\n" if u.package else "")
-                + (f"유지한다면 자동 시작 해제: sudo systemctl disable --now {u.service}" if u.service else
-                   "컨테이너라면 이 PHP를 시작하는 서비스/CMD를 이미지에서 제거하거나 실행하지 않습니다."),
-                (f"systemctl is-enabled {u.service}" if u.service else "docker exec <컨테이너> ps -e")
+                (t("rem.idle.purge", package=u.package) + "\n" if u.package else "")
+                + (t("rem.idle.disable", service=u.service) if u.service else t("rem.idle.container")),
+                (f"systemctl is-enabled {u.service}" if u.service else t("rem.cmd_ps"))
                 + (f"; dpkg -l {u.package}" if u.package else "")), u.id)
             continue
         uf = {f.cve: f for f in findings if f.unit == u.id}
 
-        pending = [f for f in uf.values() if RESTART_NOTE in f.notes]
+        pending = [f for f in uf.values() if t("note.restart") in f.notes]
         if pending:
             via_nginx = any(u.settings[k].origin == "nginx" for k in ("memory_limit", "session.upload_progress.enabled"))
             add(Remediation(
-                "now", "변경한 완화 설정이 로드됐는지 확인·재시작",
-                "완화 설정 파일이 서비스 시작 이후 수정됐습니다. reload로 반영됐는지 파일만으로는 알 수 없습니다(mtime 기준 추정).",
+                "now", t("rem.pending.title"), t("rem.pending.problem"),
                 "\n".join(f.condition for f in pending),
                 u.pool.file if u.pool else (u.service or u.version_source or "-"),
                 ("sudo nginx -t && sudo systemctl reload nginx\n" if via_nginx else "") + restart,
-                recheck, "재시작 중 짧은 요청 실패 가능", f"{DOC}:108"), u.id)
+                recheck, t("rem.pending.impact"), f"{DOC}:108"), u.id)
 
         f19 = uf.get(CVES[1])
         if f19 and f19.verdict == "reachable":
             up = u.settings["session.upload_progress.enabled"]
             if ini_bool(up.value) is not False:
-                fix = f"{target}에 추가:\n" + admin.format(k="session.upload_progress.enabled", v="0")
+                fix = t("rem.add_to", target=target) + "\n" + admin.format(k="session.upload_progress.enabled", v="0")
                 if up.origin == "php.ini":
-                    fix += f"\n(또는 {up.location} 줄을 'session.upload_progress.enabled = Off'로 변경)"
-                fix += "\n※ ini_set()·.user.ini로는 효과 없음"
+                    fix += "\n" + t("rem.19.or_phpini", loc=up.location)
+                fix += "\n" + t("rem.19.no_ini_set")
                 add(Remediation(
-                    "temp", "CVE-2026-109619 임시 완화: session.upload_progress 비활성화",
-                    "기본 활성 상태의 upload progress가 stale state 소비 경로를 엽니다.",
+                    "temp", t("rem.19.up.title"), t("rem.19.up.problem"),
                     set_desc(up), up.location if up.origin != "default" else (u.pool.file if u.pool else "php.ini"),
-                    fix, f"{restart}\n{recheck}",
-                    "세션 기반 업로드 진행률 표시 기능이 동작하지 않습니다.", f"{DOC}:54, :108"), u.id)
+                    fix, f"{restart}\n{recheck}", t("rem.19.up.impact"), f"{DOC}:54, :108"), u.id)
         bt = u.settings["fatal_error_backtraces"]
         if f19 and f19.verdict != "mitigated" and u.branch and u.branch >= (8, 5) and ini_bool(bt.value) is not False:
             add(Remediation(
-                    "temp", "CVE-2026-109619 임시 완화: fatal_error_backtraces 비활성화(PHP 8.5)",
-                    "PHP 8.5 기본값에서 활성이며, mod_php에서는 RCE 경로가 확인됐습니다.", set_desc(bt),
+                    "temp", t("rem.19.bt.title"), t("rem.19.bt.problem"), set_desc(bt),
                     bt.location if bt.origin != "default" else target,
-                    f"{target}에 추가:\n" + admin.format(k="fatal_error_backtraces", v="0"),
+                    t("rem.add_to", target=target) + "\n" + admin.format(k="fatal_error_backtraces", v="0"),
                     f"{restart}\n{recheck}", "", f"{DOC}:53, :109"), u.id)
 
         f18 = uf.get(CVES[0])
@@ -1273,42 +1280,39 @@ def remediations(units: List[Unit], findings: List[Finding], vstatus, host: Host
             pm_b, um_b = ini_bytes(pm.value), ini_bytes(um.value)
             body = [fe for fe in u.frontends if fe.kind == "nginx"]
             lines = [
-                f"{target}에 추가:",
+                t("rem.add_to", target=target),
                 admin.format(k="memory_limit", v="-1"),
             ]
             limit = 32 * 1024 ** 2
             if pm_b is None or pm_b <= 0 or pm_b > limit:  # 0 means unlimited
-                lines.append(admin.format(k="post_max_size", v="32M") + "   ; 업로드 불필요 시 8M")
+                lines.append(admin.format(k="post_max_size", v="32M") + "   ; " + t("rem.18.pm_comment"))
                 pm_target = limit
             else:
                 pm_target = pm_b
             if um_b is None or um_b <= 0 or um_b >= pm_target:
                 lines.append(admin.format(k="upload_max_filesize", v=fmt_size(pm_target // 2))
-                             + "   ; post_max_size보다 작게")
+                             + "   ; " + t("rem.18.um_comment"))
             lines += [
                 "",
-                "memory_limit=-1은 요청별 상한을 없애므로 서비스 단위 메모리 상한을 함께 둡니다:",
+                t("rem.18.memmax_intro"),
             ] + ([
                 f"sudo systemctl edit {u.service}",
                 "  [Service]",
-                "  MemoryMax=<서버 메모리에 맞는 값>",
+                "  MemoryMax=" + t("rem.18.memmax_value"),
             ] if u.service else [
-                "컨테이너 메모리 제한: compose의 mem_limit 또는 docker run --memory",
+                t("rem.18.container_mem"),
             ]) + [
-                "(RLIMIT_AS/RLIMIT_DATA는 사용하지 않습니다)",
+                t("rem.18.no_rlimit"),
             ]
             current = [set_desc(ml), set_desc(pm), set_desc(um)]
             for fe in body:
-                current.append(f"nginx client_max_body_size={fe.body_limit or '1m(기본값)'}"
+                current.append(f"nginx client_max_body_size={fe.body_limit or t('rem.18.body_default')}"
                                f" ({fe.body_limit_loc or fe.location})")
             add(Remediation(
-                "temp", "CVE-2026-109618 임시 완화: memory_limit 잠금 + 요청 크기 제한",
-                "multipart 파싱 중 memory_limit 초과로 부분 초기화된 요청 데이터가 정리되며 메모리 손상이 일어납니다."
-                + (" mod_php는 앱 코드 실행 전에 성립합니다." if u.sapi == "apache2handler" else ""),
+                "temp", t("rem.18.title"),
+                t("rem.18.problem") + (t("rem.18.problem_modphp") if u.sapi == "apache2handler" else ""),
                 "\n".join(current), u.pool.file if u.pool else (ml.location if ml.origin != "default" else target),
-                "\n".join(lines), f"{restart}\n{recheck}",
-                "앱이 multipart를 쓰지 않으면 웹서버 앞단에서 multipart 요청 자체를 차단하는 것이 가장 확실합니다(DOC:105).",
-                f"{DOC}:101-105"), u.id)
+                "\n".join(lines), f"{restart}\n{recheck}", t("rem.18.impact"), f"{DOC}:101-105"), u.id)
 
         for ws in (webscans[r] for fe in u.frontends for r in fe.roots if r in webscans):
             for s in ws.user_ini + ws.ini_set:
@@ -1316,57 +1320,51 @@ def remediations(units: List[Unit], findings: List[Finding], vstatus, host: Host
                     continue
                 if s.key == "session.upload_progress.enabled" and ini_bool(s.value) is False:
                     add(Remediation(
-                        "temp", "효과 없는 완화 설정 정리", "이 위치의 설정은 요청 파싱 이후 적용되어 효과가 없습니다.",
-                        set_desc(s), s.location, "해당 줄을 제거하고 pool/php.ini 수준 설정으로 옮깁니다.",
+                        "temp", t("rem.ineffective.title"), t("rem.ineffective.problem"),
+                        set_desc(s), s.location, t("rem.ineffective.fix"),
                         recheck, "", f"{DOC}:108"), u.id)
 
         ep = u.settings["expose_php"]
         if ini_bool(ep.value) is not False:
             add(Remediation(
-                "hygiene", "PHP 버전 헤더 노출 차단(expose_php)",
-                "X-Powered-By로 PHP 버전이 공개되어 공격 대상 선별에 쓰입니다.", set_desc(ep),
+                "hygiene", t("rem.expose.title"), t("rem.expose.problem"), set_desc(ep),
                 ep.location if ep.origin != "default" else "php.ini",
                 f"{ep.location if ep.origin == 'php.ini' else 'php.ini'}: expose_php = Off",
-                f"{restart}\ncurl -sI https://<호스트>/ | grep -i x-powered-by   # 출력이 없어야 함"), u.id)
+                f"{restart}\n" + t("rem.expose.verify")), u.id)
 
     # TLS chain (nginx ssl_certificate / Apache SSLCertificateFile without chain file).
     for fe in {id(f): f for u in units for f in u.frontends}.values():
         for cert, where in fe.ssl_certs:
             if cert_count(host, cert) == 1 and not fe.chain_file:
                 add(Remediation(
-                    "hygiene", "TLS 인증서 체인 누락(중간 CA 미포함)",
-                    "서버가 leaf 인증서만 보내 Python·curl·일부 모바일 클라이언트에서 검증이 실패합니다. "
-                    "브라우저는 AIA로 보완해 정상처럼 보입니다.",
-                    f"{cert}: 인증서 1개", where,
-                    "leaf 뒤에 중간 CA를 이어 붙인 fullchain 파일로 교체:\n"
-                    f"cat <leaf.crt> <intermediate.crt> > <fullchain.crt>\nssl_certificate <fullchain.crt>;",
-                    "sudo nginx -t && sudo systemctl reload nginx\n"
-                    "openssl s_client -connect <호스트>:443 -servername <호스트> -showcerts </dev/null | grep -c 'BEGIN CERT'  # 2 이상"))
+                    "hygiene", t("rem.tls.title"), t("rem.tls.problem"),
+                    t("rem.tls.current", cert=cert), where,
+                    t("rem.tls.fix") + "\n"
+                    "cat <leaf.crt> <intermediate.crt> > <fullchain.crt>\nssl_certificate <fullchain.crt>;",
+                    "sudo nginx -t && sudo systemctl reload nginx\n" + t("rem.tls.verify")))
 
+    # The remote checker reports a missing intermediate CA through the OpenSSL reason text,
+    # which is the same in every --lang.
     for r in remote:
-        notes = " ".join(r.get("notes") or [])
-        if "중간 CA" in notes or "unable to get local issuer" in (r.get("reason") or ""):
+        if "unable to get local issuer" in (r.get("reason") or ""):
             add(Remediation(
-                "hygiene", "TLS 인증서 체인 누락(중간 CA 미포함)", "원격 점검에서 인증서 체인 검증이 실패했습니다.",
-                r.get("reason", ""), f"원격: {r.get('target')}",
-                "웹서버의 인증서 설정을 fullchain(leaf + 중간 CA) 파일로 교체합니다.",
-                "openssl s_client -connect <호스트>:443 -servername <호스트> -showcerts </dev/null | grep -c 'BEGIN CERT'  # 2 이상"))
+                "hygiene", t("rem.tls.title"), t("rem.tls.remote_problem"),
+                r.get("reason", ""), t("rem.tls.remote_loc", target=r.get("target")),
+                t("rem.tls.remote_fix"), t("rem.tls.verify")))
 
     # Possible compromise: evidence to check, never a verdict.
     if log_hits:
-        detail = "\n".join(f"{h.file}: {h.category} {h.count}건" for h in log_hits)
+        detail = "\n".join(t("rem.log.line", file=h.file, category=h.category, count=h.count) for h in log_hits)
         add(Remediation(
-            "check", "침해 징후 확인: 워커 비정상 종료·메모리 한도 초과 로그",
-            "공격 시도와 일반 버그 모두 원인이 될 수 있습니다. 발생 시점이 "
-            f"{FIRST_SEEN} 이후에 몰리는지, multipart POST 요청과 시각이 겹치는지 확인합니다.",
-            detail, "로그", "해당 시각의 access log에서 요청 경로·출발지를 대조합니다.",
+            "check", t("rem.log.title"), t("rem.log.problem", since=FIRST_SEEN),
+            detail, t("rem.log.loc"), t("rem.log.fix"),
             "grep -E 'POST' /var/log/nginx/access.log | awk '{print $4, $1, $7}' | less"))
     recent = [(ws.root, ws) for ws in webscans.values() if ws.recent_total]
     for root, ws in recent:
         add(Remediation(
-            "check", f"침해 징후 확인: {FIRST_SEEN} 이후 변경된 .php 파일",
-            "배포에 의한 정상 변경일 수 있습니다. 배포 이력과 대조해 설명되지 않는 파일을 확인합니다.",
-            f"{ws.recent_total}개" + (" (일부만 표시)" if ws.recent_total > len(ws.recent_php) else ""), root,
+            "check", t("rem.recent.title", since=FIRST_SEEN), t("rem.recent.problem"),
+            t("rem.recent.count", n=ws.recent_total) + (t("rem.recent.partial") if ws.recent_total > len(ws.recent_php) else ""),
+            root,
             "\n".join(f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(mt))}  {p}" for p, mt in ws.recent_php[:15]),
             f"find {root} -name '*.php' -newermt {FIRST_SEEN} -ls"))
     order = {"now": 0, "temp": 1, "hygiene": 2, "check": 3}
@@ -1400,7 +1398,8 @@ def build_report(host: Host, args) -> dict:
                        None)
             if hit:
                 u.version = hit["detected_version"]
-                u.version_source = f"원격 헤더 {hit.get('version_source')} ({hit.get('target')})"
+                u.version_source = t("vsrc.remote", source=hit.get("version_source"), target=hit.get("target"))
+                u.version_remote = True
 
     since = time.mktime(time.strptime(args.since, "%Y-%m-%d"))
     roots = sorted({r for u in units for fe in u.frontends for r in fe.roots} | set(args.webroot or []))
@@ -1427,7 +1426,7 @@ def build_report(host: Host, args) -> dict:
     rems = remediations(units, findings, vstatus, host, webscans, log_hits, remote)
 
     hostname = (host.read_text("/etc/hostname") or "").strip() or (socket.gethostname() if not host.prefix else "fixture")
-    counts = {k: sum(1 for f in findings if f.verdict == k) for k in VERDICT_KO}
+    counts = {k: sum(1 for f in findings if f.verdict == k) for k in VERDICTS}
     return {
         "project": hostname,
         "tool": f"php2shell_host.py v{VERSION}",
@@ -1498,79 +1497,61 @@ def md_block(text, lang: str = "") -> List[str]:
 # Closing guidance for administrators running an old PHP in production. Static text; every
 # claim points at the basis document so the report never asserts more than the document does.
 OPS_GUIDE = [
-    ("1. 오늘: 서비스를 멈추지 않고 할 수 있는 일", [
-        "인터넷에 공개된 PHP 경로와 업로드·관리 화면을 파악하고, 불필요한 공개부터 닫습니다.",
-        "§조치 사항의 임시 완화를 적용하고 모든 워커를 재시작합니다. 설정만으로는 완전히 완화되지 않습니다(DOC:96, :108).",
-        "웹서버·프록시 앞단에서 요청 크기·multipart 파트 수를 제한하고, multipart를 쓰지 않는 앱은 차단합니다(DOC:103, :105). "
-        "WAF는 그 경로를 지나는 트래픽에만 효과가 있는 임시방편입니다(DOC:115).",
-        f"침해 조사 범위는 공개일이 아니라 {FIRST_SEEN}부터 잡습니다(DOC:125). 로그가 없다고 안전한 것은 아닙니다(DOC:126).",
-    ]),
-    ("2. 이번 주: 보안 수정이 들어간 패키지 확보", [
-        "배포판·LTS 벤더 패키지의 보안 업데이트를 확인합니다. 배포판 패키지는 changelog로 백포트 여부를 확인합니다(DOC:69, :72, :172).",
-        "확장 지원 서비스(예: 배포판의 유료 확장 보안 지원, 상용 PHP 장기 지원)로 수정판을 받을 수 있는지 확인합니다. 제공 여부는 공급자에게 직접 확인해야 합니다.",
-        "PHP 7.3 이하는 PHP 측 패치와 소스 백포트가 없습니다(DOC:70). 이 단계를 건너뛰고 3·4단계로 갑니다.",
-    ]),
-    ("3. 업그레이드 경로: 중단 없이 옮기기", [
-        "목표는 보안 지원 중인 브랜치입니다. 8.2는 2026-12-31에 지원이 끝나므로 8.3 이상을 권장합니다(DOC:161).",
-        "호환성은 정적 분석(예: PHP_CodeSniffer의 PHPCompatibility 규칙)과 자동 변환 도구(예: Rector)로 먼저 확인하고, "
-        "사용 중인 확장 모듈·프레임워크·CMS가 목표 버전을 지원하는지 확인합니다.",
-        "새 버전을 별도 FPM pool이나 컨테이너로 나란히 띄워 스테이징 → 일부 트래픽 → 전체 전환 순으로 옮기고, 이전 버전으로 되돌릴 경로를 남겨 둡니다.",
-    ]),
-    ("4. 당장 업그레이드할 수 없을 때", [
-        "인터넷 직접 노출을 없애고, 접근 통제된 내부망·VPN 뒤로 옮기거나 꼭 필요한 기능만 리버스 프록시로 공개합니다.",
-        "CISA는 패치할 수 없거나 8.1 이하인 시스템의 오프라인 전환을 권고했습니다(DOC:114).",
-        "그래도 운영을 계속한다면 위험 수용을 문서로 남깁니다: 승인 책임자, 적용한 보완 통제, 재검토 기한.",
-    ]),
-    ("5. 다른 조직의 서버에서 발견했을 때", [
-        "허가 없이 직접 점검·검증하지 않습니다. 운영 주체나 공식 신고 채널(국내는 KISA 보호나라·KrCERT/CC)로 알립니다.",
-        "조치가 끝나기 전에는 취약 사실과 대상을 공개하지 않습니다.",
-    ]),
+    ("ops.today", ("ops.today.1", "ops.today.2", "ops.today.3", "ops.today.4")),
+    ("ops.week", ("ops.week.1", "ops.week.2", "ops.week.3")),
+    ("ops.upgrade", ("ops.upgrade.1", "ops.upgrade.2", "ops.upgrade.3")),
+    ("ops.cannot", ("ops.cannot.1", "ops.cannot.2", "ops.cannot.3")),
+    ("ops.others", ("ops.others.1", "ops.others.2")),
 ]
+
+
+def ops_guide() -> List[Tuple[str, List[str]]]:
+    return [(t(title), [t(k, since=FIRST_SEEN) for k in items]) for title, items in OPS_GUIDE]
 
 
 def render_md(rep: dict) -> str:
     s = rep["summary"]
-    out = [f"# PHP2Shell 노출 점검 보고서", "",
-           f"**호스트:** {md_escape(rep['project'])}  ",
-           f"**점검 시각:** {rep['generated_at']}  ",
-           f"**점검 도구:** {rep['tool']} (비파괴: 실행 명령 0건, 네트워크 요청 0건)  ",
-           f"**판정 근거:** {rep['basis']} §2", "",
-           "## 1. 요약 (Executive Summary)", "",
-           f"서빙 경로 **{s['units']}개**에서 PHP2Shell(CVE-2026-109618 / CVE-2026-109619) {s['findings']}건을 판정한 결과 "
-           f"**도달가능 {s['reachable']}건**, 완화됨(임시) {s['mitigated']}건, 판정보류 {s['undetermined']}건, "
-           f"패치됨 {s['patched']}건입니다.", ""]
+    out = [f"# {t('report.title')}", "",
+           f"**{t('lbl.host')}:** {md_escape(rep['project'])}  ",
+           f"**{t('lbl.time')}:** {rep['generated_at']}  ",
+           f"**{t('lbl.tool')}:** {rep['tool']} ({t('md.nondestructive')})  ",
+           f"**{t('lbl.basis')}:** {rep['basis']} §2", "",
+           f"## 1. {t('md.h.summary')}", "",
+           t("md.summary", units=s["units"], findings=s["findings"], reachable=s["reachable"],
+             mitigated=s["mitigated"], undetermined=s["undetermined"], patched=s["patched"]), ""]
     if not s["units"]:
-        out += ["> ⚠️ **PHP 서빙 경로를 찾지 못했습니다.** 지원하지 않는 배치이거나 설정을 읽지 못했을 수 있습니다. "
-                "'도달가능 0건'은 안전을 뜻하지 않습니다.", ""]
+        out += ["> ⚠️ " + t("md.no_units"), ""]
     if s["eol_units"]:
-        out += [f"> ⚠️ **패치가 존재하지 않는 PHP 브랜치가 서비스 중입니다** ({', '.join(s['eol_units'])}). "
-                "업그레이드 외에 수정 수단이 없으므로, 그때까지의 노출 축소를 결정해야 합니다.", ""]
-    out += ["> ℹ️ 설정 변경은 **임시 완화**입니다. PHP는 설정만으로 완전히 완화되지 않는다고 밝혔습니다"
-            f"({DOC}:96). '완화됨(임시)'은 '안전'이 아닙니다.", ""]
+        out += ["> ⚠️ " + t("md.eol", units=", ".join(s["eol_units"])), ""]
+    out += ["> ℹ️ " + t("md.temp_only", doc=DOC), ""]
     if s["compromise_checks"]:
-        out += [f"> 🔎 침해 징후 확인 항목 {s['compromise_checks']}건이 있습니다(§6). 판정이 아니라 확인이 필요한 근거입니다.", ""]
+        out += ["> 🔎 " + t("md.compromise", n=s["compromise_checks"]), ""]
 
-    out += ["## 2. 점검 대상 (서빙 경로)", "",
-            "| ID | 대상 | 패키지 버전 | 버전 판정 | 실행 | 웹서버 |", "|---|---|---|---|---|---|"]
+    out += [f"## 2. {t('md.h.scope')}", "",
+            "| " + " | ".join(["ID", t("col.target"), t("col.pkgver"), t("col.vstatus"), t("col.run"), t("col.web")]) + " |",
+            "|---|---|---|---|---|---|"]
     for u in rep["units"]:
-        fe = "<br>".join(md_escape(f"{f['kind']} {' '.join(f['names'][:3])}") for f in u["frontends"]) or "미확인"
-        run = {True: f"실행 중 (시작 {u['started_at'] or '?'})", False: "중지", None: "확인 불가"}[u["running"]]
+        fe = "<br>".join(md_escape(f"{f['kind']} {' '.join(f['names'][:3])}") for f in u["frontends"]) or t("unit.no_fe")
+        run = {True: t("unit.running", started=u["started_at"] or "?"), False: t("unit.stopped"),
+               None: t("unit.unknown")}[u["running"]]
         out.append(f"| {u['id']} | {md_escape(u['label'])} | {md_escape(u['package_version'] or u['version'] or '-')} | "
                    f"{md_escape(u['version_detail'])} | {run} | {fe} |")
     out.append("")
 
-    out += ["## 3. CVE별 판정", "",
-            "| ID | CVE | 대상 | 심각도 | 판정 | 신뢰도 | 수정버전 | 근거 |", "|---|---|---|---|---|---|---|---|"]
+    out += [f"## 3. {t('h.findings')}", "",
+            "| " + " | ".join(["ID", "CVE", t("col.target"), t("col.severity"), t("col.verdict"), t("col.confidence"),
+                              t("col.fixed"), t("col.rationale")]) + " |",
+            "|---|---|---|---|---|---|---|---|"]
     icon = {"reachable": "🔴", "mitigated": "🟡", "undetermined": "⚪", "patched": "🟢"}
     for f in rep["items"]:
         out.append(f"| {f['id']} | {f['cve']} | {f['unit']} | {f['severity']} | {icon[f['verdict']]} {f['verdict_ko']} | "
                    f"{f['confidence']} | {f['fixed_version']} | {md_escape(f['rationale'])} |")
     out.append("")
 
-    out += ["## 4. 판정 근거 (서빙 경로)", ""]
+    out += [f"## 4. {t('h.evidence')}", ""]
     for f in rep["items"]:
         out += [f"### {f['id']} {f['cve']} — {f['verdict_ko']} ({f['unit']})", "",
-                f"**조건:** {md_code(f['condition'])}", "", "```mermaid", "flowchart LR"]
+                f"**{t('lbl.condition')}:** {md_code(f['condition'])}", "", "```mermaid", "flowchart LR"]
         for i, node in enumerate(f["evidence_path"]):
             label = node.replace('"', "'").replace("`", "'").replace("<", "&lt;").replace(">", "&gt;")
             out.append(f'  n{i}["{label}"]')
@@ -1579,51 +1560,47 @@ def render_md(rep: dict) -> str:
         out += [f"- {md_escape(n)}" for n in f["notes"]]
         out.append("")
 
-    out += ["## 5. 조치 사항 (Remediation)", ""]
+    out += [f"## 5. {t('md.h.remediation')}", ""]
     for i, r in enumerate([r for r in rep["remediation"] if r["priority"] != "check"], 1):
-        out += [f"### 5.{i} [{PRIO_KO[r['priority']]}] {r['title']}", "",
-                f"- **문제:** {md_escape(r['problem'])}",
-                f"- **현재:** {md_escape(r['current'])}",
-                f"- **위치:** {md_code(r['location'])}" + (f" (대상: {', '.join(r['units'])})" if r["units"] else ""),
-                "- **조치:**", ""] + md_block(r["fix"]) + ["",
-                "- **확인:**", ""] + md_block(r["verify"], "bash") + [""]
+        out += [f"### 5.{i} [{t('prio.' + r['priority'])}] {r['title']}", "",
+                f"- **{t('lbl.problem')}:** {md_escape(r['problem'])}",
+                f"- **{t('lbl.current')}:** {md_escape(r['current'])}",
+                f"- **{t('lbl.location')}:** {md_code(r['location'])}"
+                + (t("md.rem_units", units=", ".join(r["units"])) if r["units"] else ""),
+                f"- **{t('lbl.fix')}:**", ""] + md_block(r["fix"]) + ["",
+                f"- **{t('lbl.verify')}:**", ""] + md_block(r["verify"], "bash") + [""]
         if r["impact"]:
-            out.append(f"- **영향:** {r['impact']}")
+            out.append(f"- **{t('lbl.impact')}:** {r['impact']}")
         if r["refs"]:
-            out.append(f"- **근거:** {r['refs']}")
+            out.append(f"- **{t('lbl.refs')}:** {r['refs']}")
         out.append("")
 
-    out += ["## 6. 침해 징후 점검 (확인 필요)", ""]
+    out += [f"## 6. {t('md.h.compromise')}", ""]
     checks = [r for r in rep["remediation"] if r["priority"] == "check"]
     if not checks:
-        out += ["점검한 로그와 웹루트에서 확인이 필요한 항목을 찾지 못했습니다. 공개된 IOC는 아직 없으므로(DOC:120) "
-                "이 결과가 침해되지 않았다는 증명은 아닙니다.", ""]
+        out += [t("no_checks", doc="DOC"), ""]
     for r in checks:
         out += [f"### {md_escape(r['title'])}", "", md_escape(r["problem"]), ""] \
-            + md_block(f"{r['current']}\n\n{r['fix']}") + ["", f"확인: {md_code(r['verify'])}", ""]
+            + md_block(f"{r['current']}\n\n{r['fix']}") + ["", f"{t('lbl.verify')}: {md_code(r['verify'])}", ""]
     for h in rep["log_hits"]:
-        out += [f"- {md_code(h['file'])} {h['category']} {h['count']}건 — 최근 예: {md_code(h['samples'][-1])}"]
+        out += ["- " + t("md.loghit", file=md_code(h["file"]), category=h["category"], count=h["count"],
+                         sample=md_code(h["samples"][-1]))]
     out.append("")
 
-    t = rep["transparency"]
-    out += ["## 7. 투명성 부록", "",
-            f"- **실행한 명령:** {t['commands_executed']}건 · **네트워크 요청:** {t['network_requests']}건 · "
-            f"**쓰기:** 보고서 디렉터리({md_code(t['writes'][0])})만",
-            f"- **읽은 파일:** {len(t['files_read'])}개 (전체 목록은 report.json `transparency.files_read`)",
-            f"- **권한 부족으로 읽지 못한 파일:** {len(t['files_denied'])}개" +
-            (" — " + ", ".join(md_code(p) for p in t["files_denied"][:20]) if t["files_denied"] else ""),
-            f"- **상한:** 설정 {t['limits']['conf_bytes'] // 1024 // 1024}MiB, 로그 끝 {t['limits']['log_tail_bytes'] // 1024 // 1024}MiB, "
-            f"웹루트 파일 {t['limits']['walk_files']}개",
-            "", "**한계:**",
-            "- 설정 파일을 읽어 실효값을 계산합니다. 실행 중인 프로세스의 실제 값과 다를 수 있으며, 재시작 반영 여부는 파일 수정 시각으로 추정합니다.",
-            "- Apache의 php_value/php_admin_value는 VirtualHost·Directory 구분 없이 전역으로 취급합니다.",
-            "- RHEL 계열은 패키지 버전을 확인하지 못합니다(rpm DB 미해석). php-cgi, LiteSpeed, FrankenPHP는 점검하지 않습니다.",
-            "- 메모리 레이아웃·워커 재사용 등 익스플로잇 성공 조건(AC:H/AT:P)은 판정하지 않습니다.", ""]
-    out += ["## 8. 운영 중인 구버전 PHP 서버 대응 안내", "",
-            "업그레이드가 답이라는 것은 대개 이미 알고 있습니다. 문제는 운영 중인 서버를 그때까지 어떻게 다루느냐입니다.", ""]
-    for title, items in OPS_GUIDE:
+    tr = rep["transparency"]
+    out += [f"## 7. {t('h.transparency')}", "",
+            "- " + t("md.tr.nondestructive", cmds=tr["commands_executed"], net=tr["network_requests"],
+                     out=md_code(tr["writes"][0])),
+            "- " + t("md.tr.read", n=len(tr["files_read"])),
+            "- " + t("md.tr.denied", n=len(tr["files_denied"])) +
+            (" — " + ", ".join(md_code(p) for p in tr["files_denied"][:20]) if tr["files_denied"] else ""),
+            "- " + t("md.tr.limits", conf=tr["limits"]["conf_bytes"] // 1024 // 1024,
+                     log=tr["limits"]["log_tail_bytes"] // 1024 // 1024, walk=tr["limits"]["walk_files"]),
+            "", f"**{t('h.limits')}:**"] + ["- " + t(k) for k in ("md.lim.1", "md.lim.2", "md.lim.3", "md.lim.4")] + [""]
+    out += [f"## 8. {t('md.h.ops')}", "", t("ops.intro"), ""]
+    for title, items in ops_guide():
         out += [f"**{title}**", ""] + [f"- {i}" for i in items] + [""]
-    out += [f"근거 표기의 DOC는 {DOC}입니다.", ""]
+    out += [t("doc_note", doc=DOC), ""]
     return "\n".join(out)
 
 
@@ -1700,6 +1677,12 @@ pre{font-family:var(--mono);font-size:10.5px;background:#F4F3EE;border:1px solid
 """
 
 
+# Han characters shared by CJK languages render with Korean glyph shapes under a KR font, so
+# Japanese reports put JP fonts first (appended rule; later :root declaration wins).
+SANS_JA = ('"Hiragino Sans","Yu Gothic","Noto Sans CJK JP","Pretendard",'
+           '-apple-system,system-ui,sans-serif')
+
+
 def e(s) -> str:
     return html.escape(str(s if s is not None else ""))
 
@@ -1715,58 +1698,54 @@ def render_html(rep: dict) -> str:
             f'<span>{e(no)} {e(title)}</span></div><div class="pad flow">'
             f'<p class="eyebrow"><span class="sec-no">{e(no)}</span> &nbsp;{e(eyebrow)}</p>'
             f'<h1 class="sec">{e(title)}</h1><p class="sec-sub">{e(sub)}</p><div class="sec-rule"></div>{body}</div>'
-            f'<div class="footline"></div><div class="rfoot"><span>PHP2Shell 노출 점검 보고서 · {host}</span>'
+            f'<div class="footline"></div><div class="rfoot"><span>{e(t("report.title"))} · {host}</span>'
             f'<span class="conf">Confidential</span><span class="pg">{len(pages) + 2:02d}</span></div></section>')
 
-    kpis = (f'<div class="kpis"><div class="kpi"><div class="n">{s["units"]}</div><div class="l">서빙 경로</div></div>'
-            f'<div class="kpi alert"><div class="n">{s["reachable"]}</div><div class="l">도달가능</div></div>'
-            f'<div class="kpi teal"><div class="n">{s["mitigated"]}</div><div class="l">완화됨(임시)</div></div>'
+    vl = {k: e(t("verdict." + k)) for k in VERDICTS}
+    kpis = (f'<div class="kpis"><div class="kpi"><div class="n">{s["units"]}</div><div class="l">{e(t("kpi.units"))}</div></div>'
+            f'<div class="kpi alert"><div class="n">{s["reachable"]}</div><div class="l">{vl["reachable"]}</div></div>'
+            f'<div class="kpi teal"><div class="n">{s["mitigated"]}</div><div class="l">{vl["mitigated"]}</div></div>'
             f'<div class="kpi"><div class="n">{s["undetermined"] + s["patched"]}</div>'
-            f'<div class="l">판정보류 {s["undetermined"]} · 패치됨 {s["patched"]}</div></div></div>')
+            f'<div class="l">{vl["undetermined"]} {s["undetermined"]} · {vl["patched"]} {s["patched"]}</div></div></div>')
     cover = (
         '<section class="page cover"><div class="cover-top"><div class="cover-wm"><span class="mark"></span>'
         'PHP2SHELL <span class="gd">CHECK</span></div></div><div class="cover-mid">'
         '<div class="cover-cat">Exposure Assessment · CVE-2026-109618 / 109619</div>'
-        '<h1 class="cover-title">PHP2Shell<br>노출 점검 보고서</h1>'
-        f'<p class="cover-desc">{host} 서버의 실제 서빙 경로(웹서버 → SAPI/FPM pool → PHP 빌드)와 실효 설정을 읽어 '
-        '두 취약점의 성립 조건을 판정하고, 관리자가 적용할 조치를 파일·줄 단위로 제시합니다. 점검은 비파괴로 수행됐습니다.</p></div>'
+        f'<h1 class="cover-title">{t("html.cover_title")}</h1>'
+        f'<p class="cover-desc">{t("html.cover_desc", host=host)}</p></div>'
         f'{kpis}<div class="cover-meta"><div class="cover-meta-grid">'
-        f'<div class="cmeta"><div class="k">호스트</div><div class="v">{host}</div></div>'
-        f'<div class="cmeta"><div class="k">점검 시각</div><div class="v mono">{e(rep["generated_at"])}</div></div>'
-        f'<div class="cmeta"><div class="k">점검 도구</div><div class="v">{e(rep["tool"])}</div></div>'
-        f'<div class="cmeta"><div class="k">판정 근거</div><div class="v">{e(rep["basis"])} §2</div></div>'
+        f'<div class="cmeta"><div class="k">{e(t("lbl.host"))}</div><div class="v">{host}</div></div>'
+        f'<div class="cmeta"><div class="k">{e(t("lbl.time"))}</div><div class="v mono">{e(rep["generated_at"])}</div></div>'
+        f'<div class="cmeta"><div class="k">{e(t("lbl.tool"))}</div><div class="v">{e(rep["tool"])}</div></div>'
+        f'<div class="cmeta"><div class="k">{e(t("lbl.basis"))}</div><div class="v">{e(rep["basis"])} §2</div></div>'
         '</div></div></section>')
 
     # 01 summary
     body = kpis
     if not s["units"]:
-        body += ('<div class="callout"><div class="ic">!</div><div class="ct"><b>PHP 서빙 경로를 찾지 못했습니다.</b> '
-                 '지원하지 않는 배치이거나 설정을 읽지 못했을 수 있습니다. ‘도달가능 0건’은 안전을 뜻하지 않습니다.</div></div>')
+        body += f'<div class="callout"><div class="ic">!</div><div class="ct">{t("html.no_units")}</div></div>'
     if s["eol_units"]:
-        body += ('<div class="callout"><div class="ic">!</div><div class="ct"><b>패치가 존재하지 않는 PHP 브랜치가 서비스 중입니다</b> '
-                 f'({e(", ".join(s["eol_units"]))}). 업그레이드 외에 수정 수단이 없으므로 그때까지의 노출 축소를 결정해야 합니다.</div></div>')
-    body += ('<div class="callout teal"><div class="ic">i</div><div class="ct">설정 변경은 <b>임시 완화</b>입니다. PHP는 설정만으로 '
-             f'완전히 완화되지 않는다고 밝혔습니다({e(DOC)}:96). ‘완화됨(임시)’은 ‘안전’이 아닙니다.</div></div>')
+        body += (f'<div class="callout"><div class="ic">!</div><div class="ct">'
+                 f'{t("html.eol", units=e(", ".join(s["eol_units"])))}</div></div>')
+    body += f'<div class="callout teal"><div class="ic">i</div><div class="ct">{t("html.temp_only", doc=e(DOC))}</div></div>'
     if s["compromise_checks"]:
-        body += (f'<div class="note">침해 징후 확인 항목 <b>{s["compromise_checks"]}건</b>이 있습니다(06). '
-                 '판정이 아니라 확인이 필요한 근거입니다.</div>')
-    body += ('<h2>판정 기준</h2><table class="trans">'
-             '<tr><td class="tk"><span class="badge v-reachable">도달가능</span></td><td>이 서버의 SAPI·실효 설정에서 문서가 확인한 공격 경로의 전제조건이 성립합니다.</td></tr>'
-             '<tr><td class="tk"><span class="badge v-mitigated">완화됨(임시)</span></td><td>문서의 임시 완화 설정이 요청 파싱 전 단계에 적용돼 있습니다. 업그레이드 전까지의 조치입니다.</td></tr>'
-             '<tr><td class="tk"><span class="badge v-undetermined">판정보류</span></td><td>근거가 부족하거나 설정을 읽지 못해 단정하지 않습니다. 도달불가가 아닙니다.</td></tr>'
-             '<tr><td class="tk"><span class="badge v-patched">패치됨</span></td><td>수정 버전 이상이거나 패키지 changelog에 백포트 기록이 있습니다.</td></tr></table>')
-    page("01", "Executive Summary", "요약", f"서빙 경로 {s['units']}개 · 판정 {s['findings']}건", body)
+        body += f'<div class="note">{t("html.compromise", n=s["compromise_checks"])}</div>'
+    body += (f'<h2>{e(t("html.criteria"))}</h2><table class="trans">'
+             + "".join(f'<tr><td class="tk"><span class="badge v-{k}">{vl[k]}</span></td><td>{e(t("html.crit." + k))}</td></tr>'
+                       for k in VERDICTS) + '</table>')
+    page("01", "Executive Summary", t("html.p1.title"), t("html.p1.sub", units=s["units"], findings=s["findings"]), body)
 
     # 02 scope
     rows = ""
     for u in rep["units"]:
-        fe = "<br>".join(e(f"{f['kind']} {' '.join(f['names'][:3])}") for f in u["frontends"]) or "미확인"
-        run = {True: f"실행 중<br><span class='c-sm'>{e(u['started_at'] or '')}</span>", False: "중지", None: "확인 불가"}[u["running"]]
+        fe = "<br>".join(e(f"{f['kind']} {' '.join(f['names'][:3])}") for f in u["frontends"]) or e(t("unit.no_fe"))
+        run = {True: f"{e(t('unit.running_short'))}<br><span class='c-sm'>{e(u['started_at'] or '')}</span>",
+               False: e(t("unit.stopped")), None: e(t("unit.unknown"))}[u["running"]]
         rows += (f'<tr><td class="c-cve">{e(u["id"])}</td><td>{e(u["label"])}<br><span class="c-sm">{e(u["package_version"] or u["version"] or "-")}</span></td>'
                  f'<td>{e(u["version_detail"])}</td><td>{run}</td><td class="c-sm">{fe}</td></tr>')
-    body = ('<table class="ftable"><thead><tr><th>ID</th><th>대상</th><th>버전 판정</th><th>실행</th><th>웹서버</th></tr></thead>'
-            f'<tbody>{rows}</tbody></table>')
-    page("02", "Scope", "점검 대상", "웹서버 → SAPI/FPM pool → PHP 빌드 단위로 판정합니다", body)
+    head = "".join(f"<th>{e(h)}</th>" for h in ("ID", t("col.target"), t("col.vstatus"), t("col.run"), t("col.web")))
+    body = f'<table class="ftable"><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>'
+    page("02", "Scope", t("html.p2.title"), t("html.p2.sub"), body)
 
     # 03 findings
     rows = ""
@@ -1775,8 +1754,10 @@ def render_html(rep: dict) -> str:
                  f'<td>{e(f["unit"])}</td><td><span class="badge v-{e(f["verdict"])}">{e(f["verdict_ko"])}</span></td>'
                  f'<td class="c-sm">{e(f["confidence"])}</td><td class="c-sm">{e(f["fixed_version"])}</td>'
                  f'<td>{e(f["rationale"])}</td></tr>')
-    body = ('<table class="ftable"><thead><tr><th>CVE</th><th>대상</th><th>판정</th><th>신뢰도</th><th>수정버전</th><th>근거</th></tr></thead>'
-            f'<tbody>{rows}</tbody></table><h2>판정 근거 (서빙 경로)</h2>')
+    head = "".join(f"<th>{e(h)}</th>" for h in ("CVE", t("col.target"), t("col.verdict"), t("col.confidence"),
+                                                 t("col.fixed"), t("col.rationale")))
+    body = (f'<table class="ftable"><thead><tr>{head}</tr></thead>'
+            f'<tbody>{rows}</tbody></table><h2>{e(t("h.evidence"))}</h2>')
     for f in rep["items"]:
         steps = "".join(f'<div class="pstep{" sink" if i == len(f["evidence_path"]) - 1 else ""}">{e(n)}</div>'
                         for i, n in enumerate(f["evidence_path"]))
@@ -1786,74 +1767,86 @@ def render_html(rep: dict) -> str:
                  f'<span class="badge v-{e(f["verdict"])}">{e(f["verdict_ko"])}</span><span class="c-sm">{e(f["unit"])}</span></div>'
                  f'<div class="body"><div class="pipeline">{steps}</div>'
                  f'<p style="margin:0" class="mono c-sm">{e(f["condition"])}</p>{f"<ul>{notes}</ul>" if notes else ""}</div></div>')
-    page("03", "Findings", "CVE별 판정", f"{CVSS} · 두 CVE × 서빙 경로", body)
+    page("03", "Findings", t("h.findings"), t("html.p3.sub", cvss=CVSS), body)
 
     # 04 remediation
     body = ""
     for r in (r for r in rep["remediation"] if r["priority"] != "check"):
-        units = f' · 대상 {e(", ".join(r["units"]))}' if r["units"] else ""
-        body += (f'<div class="card"><div class="top"><span class="prio p-{e(r["priority"])}">{e(PRIO_KO[r["priority"]])}</span>'
+        units = t("html.rem_units", units=e(", ".join(r["units"]))) if r["units"] else ""
+        body += (f'<div class="card"><div class="top"><span class="prio p-{e(r["priority"])}">{e(t("prio." + r["priority"]))}</span>'
                  f'<span class="t">{e(r["title"])}</span></div><div class="body"><dl class="kv">'
-                 f'<dt>문제</dt><dd>{e(r["problem"])}</dd>'
-                 f'<dt>현재</dt><dd class="mono">{e(r["current"]).replace(chr(10), "<br>")}</dd>'
-                 f'<dt>위치</dt><dd class="mono">{e(r["location"])}{units}</dd>'
-                 f'<dt>조치</dt><dd><pre>{e(r["fix"])}</pre></dd>'
-                 f'<dt>확인</dt><dd><pre>{e(r["verify"])}</pre></dd>'
-                 + (f'<dt>영향</dt><dd>{e(r["impact"])}</dd>' if r["impact"] else "")
-                 + (f'<dt>근거</dt><dd class="c-sm">{e(r["refs"])}</dd>' if r["refs"] else "")
+                 f'<dt>{e(t("lbl.problem"))}</dt><dd>{e(r["problem"])}</dd>'
+                 f'<dt>{e(t("lbl.current"))}</dt><dd class="mono">{e(r["current"]).replace(chr(10), "<br>")}</dd>'
+                 f'<dt>{e(t("lbl.location"))}</dt><dd class="mono">{e(r["location"])}{units}</dd>'
+                 f'<dt>{e(t("lbl.fix"))}</dt><dd><pre>{e(r["fix"])}</pre></dd>'
+                 f'<dt>{e(t("lbl.verify"))}</dt><dd><pre>{e(r["verify"])}</pre></dd>'
+                 + (f'<dt>{e(t("lbl.impact"))}</dt><dd>{e(r["impact"])}</dd>' if r["impact"] else "")
+                 + (f'<dt>{e(t("lbl.refs"))}</dt><dd class="c-sm">{e(r["refs"])}</dd>' if r["refs"] else "")
                  + '</dl></div></div>')
-    page("04", "Remediation", "조치 사항", "우선순위 순 · 파일·줄 단위", body or "<p>조치할 항목이 없습니다.</p>")
+    page("04", "Remediation", t("html.p4.title"), t("html.p4.sub"), body or f"<p>{e(t('html.no_rems'))}</p>")
 
     # 05 compromise + appendix
     checks = [r for r in rep["remediation"] if r["priority"] == "check"]
     body = ""
     if not checks:
-        body += ('<p>점검한 로그와 웹루트에서 확인이 필요한 항목을 찾지 못했습니다. 공개된 IOC는 아직 없으므로'
-                 f'({e(DOC)}:120) 이 결과가 침해되지 않았다는 증명은 아닙니다.</p>')
+        body += f'<p>{t("no_checks", doc=e(DOC))}</p>'
     for r in checks:
-        body += (f'<div class="card"><div class="top"><span class="prio p-check">확인 필요</span><span class="t">{e(r["title"])}</span></div>'
+        body += (f'<div class="card"><div class="top"><span class="prio p-check">{e(t("prio.check"))}</span><span class="t">{e(r["title"])}</span></div>'
                  f'<div class="body"><p>{e(r["problem"])}</p><pre>{e(r["current"])}\n\n{e(r["fix"])}</pre>'
                  f'<p class="mono c-sm" style="margin-top:8px">{e(r["verify"])}</p></div></div>')
     for h in rep["log_hits"]:
-        body += f'<div class="note"><span class="mono">{e(h["file"])}</span> · {e(h["category"])} {h["count"]}건<pre>{e(chr(10).join(h["samples"]))}</pre></div>'
-    t = rep["transparency"]
-    denied = ", ".join(t["files_denied"][:20])
-    body += ('<h2>투명성 부록</h2><table class="trans">'
-             f'<tr><td class="tk">비파괴</td><td>실행한 명령 {t["commands_executed"]}건 · 네트워크 요청 {t["network_requests"]}건 · '
-             f'쓰기는 보고서 디렉터리(<span class="mono">{e(t["writes"][0])}</span>)만</td></tr>'
-             f'<tr><td class="tk">읽은 파일</td><td>{len(t["files_read"])}개 (전체 목록은 report.json)</td></tr>'
-             f'<tr><td class="tk">읽지 못한 파일</td><td class="mono">{len(t["files_denied"])}개 {e(denied)}</td></tr>'
-             '<tr><td class="tk">한계</td><td>설정 파일 기준 실효값이며 재시작 반영은 파일 수정 시각으로 추정합니다. Apache php_* 지시자는 전역으로 취급합니다. '
-             'RHEL 계열 패키지 버전, php-cgi·LiteSpeed·FrankenPHP, 익스플로잇 성공 조건(AC:H/AT:P)은 판정하지 않습니다.</td></tr></table>'
+        body += (f'<div class="note"><span class="mono">{e(h["file"])}</span> · {e(h["category"])} '
+                 f'{e(t("html.count", n=h["count"]))}<pre>{e(chr(10).join(h["samples"]))}</pre></div>')
+    tr = rep["transparency"]
+    denied = ", ".join(tr["files_denied"][:20])
+    body += (f'<h2>{e(t("h.transparency"))}</h2><table class="trans">'
+             f'<tr><td class="tk">{e(t("html.tr.nd"))}</td><td>'
+             f'{t("html.tr.nd_text", cmds=tr["commands_executed"], net=tr["network_requests"], out=e(tr["writes"][0]))}</td></tr>'
+             f'<tr><td class="tk">{e(t("html.tr.read"))}</td><td>{e(t("html.tr.read_text", n=len(tr["files_read"])))}</td></tr>'
+             f'<tr><td class="tk">{e(t("html.tr.denied"))}</td><td class="mono">'
+             f'{e(t("html.tr.denied_text", n=len(tr["files_denied"]), files=denied))}</td></tr>'
+             f'<tr><td class="tk">{e(t("h.limits"))}</td><td>{e(t("html.tr.limits_text"))}</td></tr></table>'
              f'<div class="endmark"><span>PHP2SHELL CHECK</span><span>{e(rep["generated_at"])}</span></div>')
-    page("05", "Compromise & Appendix", "침해 징후 · 부록", "판정이 아닌 확인 항목 · 점검 방식 공개", body)
+    page("05", "Compromise & Appendix", t("html.p5.title"), t("html.p5.sub"), body)
 
     # 06 operating guidance
-    body = ('<p>업그레이드가 답이라는 것은 대개 이미 알고 있습니다. 문제는 운영 중인 서버를 그때까지 어떻게 다루느냐입니다.</p>')
-    for title, items in OPS_GUIDE:
+    body = f'<p>{e(t("ops.intro"))}</p>'
+    for title, items in ops_guide():
         body += f'<h2>{e(title)}</h2><ul class="guide">' + "".join(f"<li>{e(i)}</li>" for i in items) + "</ul>"
-    body += f'<div class="note">근거 표기의 DOC는 {e(DOC)}입니다.</div>'
+    body += f'<div class="note">{e(t("doc_note", doc=DOC))}</div>'
     body += f'<div class="endmark"><span>PHP2SHELL CHECK</span><span>{e(rep["generated_at"])}</span></div>'
-    page("06", "Operating Guidance", "운영 중인 구버전 서버 대응", "오늘 · 이번 주 · 업그레이드 경로 · 불가능할 때", body)
+    page("06", "Operating Guidance", t("html.p6.title"), t("html.p6.sub"), body)
 
-    return ('<!doctype html><html lang="ko"><head><meta charset="utf-8">'
+    css = CSS + (":root{--sans:" + SANS_JA + "}\n" if LANG == "ja" else "")
+    return (f'<!doctype html><html lang="{LANG}"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f'<title>PHP2Shell 노출 점검 보고서 — {host}</title><style>{CSS}</style></head><body>'
+            f'<title>{e(t("report.title"))} — {host}</title><style>{css}</style></head><body>'
             + cover + "".join(pages) + "</body></html>")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="PHP2Shell 비파괴 내부 점검기 (서버에서 실행)")
-    parser.add_argument("--root", default="/", help="점검할 파일시스템 루트(오프라인 사본 분석용, 기본 /)")
-    parser.add_argument("--out", default=None, help="보고서 디렉터리(기본 ./php2shell_report_<호스트>)")
-    parser.add_argument("--webroot", action="append", help="웹서버 설정 외에 추가로 검사할 웹루트(여러 번 지정 가능)")
-    parser.add_argument("--remote-json", action="append", help="php2shell_remote.py --json 결과 파일(여러 번 지정 가능)")
-    parser.add_argument("--since", default=FIRST_SEEN, help=f"이 날짜 이후 변경된 .php를 표시(기본 {FIRST_SEEN})")
+    # A console code page that lacks a character (e.g. "·" on cp932) must not turn into a
+    # traceback: exit 1 is a verdict.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+    # --lang must be known before the parser is built so that --help is localized too.
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--lang", default="ko")
+    set_lang(pre.parse_known_args()[0].lang)
+
+    parser = argparse.ArgumentParser(description=t("cli.desc"))
+    parser.add_argument("--root", default="/", help=t("cli.root"))
+    parser.add_argument("--out", default=None, help=t("cli.out"))
+    parser.add_argument("--webroot", action="append", help=t("cli.webroot"))
+    parser.add_argument("--remote-json", action="append", help=t("cli.remote_json"))
+    parser.add_argument("--since", default=FIRST_SEEN, help=t("cli.since", since=FIRST_SEEN))
+    parser.add_argument("--lang", choices=LANGS, default="ko", help=t("cli.lang"))
     args = parser.parse_args()
 
     host = Host(args.root)
     if not host.isdir("/etc"):
-        print(f"오류: {args.root} 아래에 /etc가 없습니다.", file=sys.stderr)
+        print(t("cli.no_etc", root=args.root), file=sys.stderr)
         return 2
     # The hostname comes from the inspected system, so it must not steer where the report is written.
     hostname = (host.read_text("/etc/hostname") or "").strip() or socket.gethostname()
@@ -1864,25 +1857,795 @@ def main() -> int:
         os.makedirs(args.out, exist_ok=True)
         with open(os.path.join(args.out, "report.json"), "w", encoding="utf-8") as f:
             json.dump(rep, f, ensure_ascii=False, indent=2)
-        with open(os.path.join(args.out, "report_ko.md"), "w", encoding="utf-8") as f:
+        with open(os.path.join(args.out, f"report_{LANG}.md"), "w", encoding="utf-8") as f:
             f.write(render_md(rep))
-        with open(os.path.join(args.out, "report.html"), "w", encoding="utf-8") as f:
+        with open(os.path.join(args.out, f"report_{LANG}.html"), "w", encoding="utf-8") as f:
             f.write(render_html(rep))
     except Exception as exc:  # exit 1 means "reachable"; any failure must map to 2
-        print(f"오류: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(t("cli.error", kind=type(exc).__name__, msg=exc), file=sys.stderr)
         return 2
 
     s = rep["summary"]
-    print(f"서빙 경로 {s['units']}개 · 도달가능 {s['reachable']} · 완화됨(임시) {s['mitigated']} · "
-          f"판정보류 {s['undetermined']} · 패치됨 {s['patched']} · 침해 확인 항목 {s['compromise_checks']}")
-    print(f"보고서: {args.out}")
+    print(t("cli.summary", units=s["units"], reachable=s["reachable"], mitigated=s["mitigated"],
+            undetermined=s["undetermined"], patched=s["patched"], checks=s["compromise_checks"]))
+    print(t("cli.report", out=args.out))
     if not s["units"]:
-        print("경고: PHP 서빙 경로를 찾지 못했습니다. 지원하지 않는 배치이거나 설정을 읽지 못했을 수 있으며, "
-              "'도달가능 0건'은 안전을 뜻하지 않습니다.", file=sys.stderr)
+        print(t("cli.no_units"), file=sys.stderr)
         return 2
     if s["reachable"]:
         return 1
     return 3 if s["undetermined"] else 0
+
+
+# ---------------------------------------------------------------------------
+# Message catalog. Placeholders are str.format fields; literal braces must be doubled.
+# Every language has exactly the same keys and, per key, the same placeholders.
+# ---------------------------------------------------------------------------
+
+MESSAGES: Dict[str, Dict[str, str]] = {
+    "ko": {
+        # parsing / units
+        "loc.default": "PHP 기본값",
+        "note.admin_override": "{loc}의 {key}={value}는 {admin_loc}의 php_admin 값에 막혀 무시됩니다.",
+        "fe.no_server_name": "(server_name 없음)",
+        "fe.global_name": "(전역)",
+        "fe.global_loc": "apache 전역 설정",
+        "fe.global_route": "전역",
+        "pkg.distro": "배포판 공식 패키지",
+        "pkg.unknown_origin": "출처 미상",
+        "vsrc.header": "헤더 파일 {path} (공식 Docker 이미지)",
+        "vsrc.remote": "원격 헤더 {source} ({target})",
+        "log.signal": "워커 비정상 종료(signal)",
+        "log.segfault": "PHP 프로세스 segfault",
+        "log.oom": "메모리 한도 초과 fatal",
+        # version status
+        "vs.no_branch": "PHP 버전을 확인하지 못했습니다(RHEL 계열 또는 패키지 정보 없음).",
+        "vs.patched": "{version} ≥ 수정 버전 {fixed}",
+        "vs.changelog_fix": "패키지 changelog({path})에 {cves} 백포트 기록이 있습니다.",
+        "vs.changelog_none": " changelog({path})에 CVE 백포트 기록 없음.",
+        "vs.eol": "PHP {branch}는 EOL이며 PHP2Shell 패치가 존재하지 않습니다(소스 백포트 없음, {doc}:70).",
+        "vs.backport_only": "PHP {branch}는 공식 수정 릴리스가 없고 소스 백포트만 있습니다({doc}:69).",
+        "vs.unknown_branch": "PHP {branch}는 수정 기준표에 없는 브랜치입니다.",
+        "vs.no_version": "패키지 버전을 확인하지 못했습니다.",
+        "vs.vulnerable": "{version} < 수정 버전 {fixed}.",
+        # evidence path / findings
+        "note.restart": "설정 파일이 서비스 시작 이후 수정됐습니다. 재시작·리로드로 반영됐는지 확인할 수 없습니다(파일 mtime 기준 추정, DOC:108).",
+        "path.more": " 외 {n}개",
+        "path.no_frontend": "웹서버 연결 미확인",
+        "path.no_vsrc": "버전 출처 없음",
+        "set.locked": ", php_admin 잠금",
+        "fixed.none_eol": "없음(EOL)",
+        "verdict.reachable": "도달가능",
+        "verdict.mitigated": "완화됨(임시)",
+        "verdict.undetermined": "판정보류",
+        "verdict.patched": "패치됨",
+        "ev.no_frontend": "이 pool로 요청을 보내는 웹서버 설정을 찾지 못했습니다. 외부 노출 여부는 별도 확인이 필요합니다.",
+        "ev.not_running": "점검 시점에 이 서비스 프로세스가 실행 중이 아니었습니다.",
+        "ev.unreadable": "읽지 못한 설정 파일: {files}",
+        "ev.cond_patched": "패치 적용",
+        "ev.remote_version": "버전은 원격 응답 헤더 기준입니다. 서버 패키지로 확인하십시오.",
+        "ev.cond_idle": "SAPI={sapi}, 서비스 중지·웹서버 연결 없음",
+        "ev.idle": "점검 시점에 요청을 처리하지 않는 설치입니다. 서비스를 시작하면 같은 조건이 적용됩니다.",
+        "ev18.mitigated": "memory_limit=-1로 OOM 중단 경로가 제거됨({loc}).",
+        "ev18.not_locked": "php_admin 값이 아니라 앱이 다시 유한값으로 바꿀 수 있습니다(DOC:101).",
+        "ev18.modphp": "mod_php는 request startup 실패 후에도 cleanup을 수행해 앱 코드 실행 전에 공격이 성립합니다(DOC:43).",
+        "ev18.fpm": "FPM은 startup 실패 시 워커를 종료해 이 경로가 차단되지만, startup 이후 취약할 수 있다는 분석이 있어 도달불가로 단정할 수 없습니다(DOC:44).",
+        "ev18.override": "앱/디렉터리 수준 memory_limit 변경 발견: {setting}",
+        "ev18.incomplete": "읽지 못한 설정 파일이 완화 설정을 덮어쓸 수 있어 완화로 판정하지 않습니다.",
+        "ev18.sink": "multipart 파싱 중 memory_limit 초과 → 부분 초기화 데이터 정리",
+        "ev19.late": "{setting} — {origin}/ini_set은 적용 시점이 늦어 효과가 없습니다(DOC:108).",
+        "ev19.mitigated": "session.upload_progress.enabled=0이 요청 파싱 전 단계에 설정됨({loc}).",
+        "ev19.nginx": "nginx fastcgi_param PHP_VALUE는 요청 단위로 전달됩니다. pool의 php_admin_value로 옮기는 것을 권장합니다.",
+        "ev19.backtraces": "mod_php + PHP 8.5 + fatal_error_backtraces 활성({loc}) 경로가 성립합니다(DOC:53).",
+        "ev19.upload_progress": "session.upload_progress가 활성({loc})이라 session_start() 없이도 세션 라이프사이클 경로가 성립합니다. mod_php·FPM 모두 해당(DOC:54).",
+        "ev19.incomplete": "설정 파일 일부를 읽지 못해 실효값을 확정할 수 없습니다.",
+        "ev19.sink": "fatal error로 정리 중단 → 같은 워커의 다음 요청이 stale state 소비",
+        # remediation
+        "rem.restart_container": "docker restart <컨테이너>   # 컨테이너라면 이미지 재빌드·재배포가 원칙",
+        "rem.recheck": "sudo python3 php2shell_host.py  # 재점검으로 판정 변화 확인",
+        "rem.target_pool": "{file} 의 [{pool}] 섹션",
+        "rem.target_apache": "Apache 설정(예: /etc/apache2/conf-available/php2shell.conf, a2enconf로 활성화)",
+        "rem.add_to": "{target}에 추가:",
+        "rem.cmd_php_v": "docker exec <컨테이너> php -v",
+        "rem.cmd_ps": "docker exec <컨테이너> ps -e",
+        "rem.eol.title": "PHP {branch}: 패치가 존재하지 않는 브랜치 — 노출 축소 결정",
+        "rem.eol.fix": "업그레이드 일정과 별개로, 그때까지의 노출을 줄이는 결정이 필요합니다.\n· 외부 접근 범위 축소(관리 화면·업로드 경로 접근 제한, WAF 적용 여부 확인)\n· 아래 임시 완화 항목 전부 적용\n· CISA는 패치할 수 없는 시스템의 오프라인 전환을 권고(DOC:114)",
+        "rem.eol.verify": "결정 사항과 적용 범위를 기록",
+        "rem.bp.title": "PHP {branch}: 패키지 공급원에 백포트 여부 확인",
+        "rem.bp.fix_pkg": "패키지 공급원의 보안 업데이트를 확인하고, 없으면 지원 브랜치로 이전합니다.",
+        "rem.bp.fix_image": "공식 이미지에는 벤더 백포트가 없습니다. 수정이 포함된 지원 브랜치 태그로 베이스 이미지를 올려 재빌드·재배포합니다.",
+        "rem.vuln.title": "{what} 보안 업데이트",
+        "rem.vuln.fix_image": "베이스 이미지를 수정 버전 이상의 태그(예: php:{fixed}-…)로 올려 다시 빌드·배포",
+        "rem.idle.title": "미사용 PHP {branch} 설치 정리",
+        "rem.idle.problem": "실행 중이 아니고 웹서버 연결도 없지만, 시작되면 같은 취약 조건으로 서비스됩니다.",
+        "rem.idle.current": "{what} {version} (서비스 중지)",
+        "rem.idle.purge": "필요 없으면 제거: sudo apt-get purge {package}",
+        "rem.idle.disable": "유지한다면 자동 시작 해제: sudo systemctl disable --now {service}",
+        "rem.idle.container": "컨테이너라면 이 PHP를 시작하는 서비스/CMD를 이미지에서 제거하거나 실행하지 않습니다.",
+        "rem.pending.title": "변경한 완화 설정이 로드됐는지 확인·재시작",
+        "rem.pending.problem": "완화 설정 파일이 서비스 시작 이후 수정됐습니다. reload로 반영됐는지 파일만으로는 알 수 없습니다(mtime 기준 추정).",
+        "rem.pending.impact": "재시작 중 짧은 요청 실패 가능",
+        "rem.19.or_phpini": "(또는 {loc} 줄을 'session.upload_progress.enabled = Off'로 변경)",
+        "rem.19.no_ini_set": "※ ini_set()·.user.ini로는 효과 없음",
+        "rem.19.up.title": "CVE-2026-109619 임시 완화: session.upload_progress 비활성화",
+        "rem.19.up.problem": "기본 활성 상태의 upload progress가 stale state 소비 경로를 엽니다.",
+        "rem.19.up.impact": "세션 기반 업로드 진행률 표시 기능이 동작하지 않습니다.",
+        "rem.19.bt.title": "CVE-2026-109619 임시 완화: fatal_error_backtraces 비활성화(PHP 8.5)",
+        "rem.19.bt.problem": "PHP 8.5 기본값에서 활성이며, mod_php에서는 RCE 경로가 확인됐습니다.",
+        "rem.18.pm_comment": "업로드 불필요 시 8M",
+        "rem.18.um_comment": "post_max_size보다 작게",
+        "rem.18.memmax_intro": "memory_limit=-1은 요청별 상한을 없애므로 서비스 단위 메모리 상한을 함께 둡니다:",
+        "rem.18.memmax_value": "<서버 메모리에 맞는 값>",
+        "rem.18.container_mem": "컨테이너 메모리 제한: compose의 mem_limit 또는 docker run --memory",
+        "rem.18.no_rlimit": "(RLIMIT_AS/RLIMIT_DATA는 사용하지 않습니다)",
+        "rem.18.body_default": "1m(기본값)",
+        "rem.18.title": "CVE-2026-109618 임시 완화: memory_limit 잠금 + 요청 크기 제한",
+        "rem.18.problem": "multipart 파싱 중 memory_limit 초과로 부분 초기화된 요청 데이터가 정리되며 메모리 손상이 일어납니다.",
+        "rem.18.problem_modphp": " mod_php는 앱 코드 실행 전에 성립합니다.",
+        "rem.18.impact": "앱이 multipart를 쓰지 않으면 웹서버 앞단에서 multipart 요청 자체를 차단하는 것이 가장 확실합니다(DOC:105).",
+        "rem.ineffective.title": "효과 없는 완화 설정 정리",
+        "rem.ineffective.problem": "이 위치의 설정은 요청 파싱 이후 적용되어 효과가 없습니다.",
+        "rem.ineffective.fix": "해당 줄을 제거하고 pool/php.ini 수준 설정으로 옮깁니다.",
+        "rem.expose.title": "PHP 버전 헤더 노출 차단(expose_php)",
+        "rem.expose.problem": "X-Powered-By로 PHP 버전이 공개되어 공격 대상 선별에 쓰입니다.",
+        "rem.expose.verify": "curl -sI https://<호스트>/ | grep -i x-powered-by   # 출력이 없어야 함",
+        "rem.tls.title": "TLS 인증서 체인 누락(중간 CA 미포함)",
+        "rem.tls.problem": "서버가 leaf 인증서만 보내 Python·curl·일부 모바일 클라이언트에서 검증이 실패합니다. 브라우저는 AIA로 보완해 정상처럼 보입니다.",
+        "rem.tls.current": "{cert}: 인증서 1개",
+        "rem.tls.fix": "leaf 뒤에 중간 CA를 이어 붙인 fullchain 파일로 교체:",
+        "rem.tls.verify": "openssl s_client -connect <호스트>:443 -servername <호스트> -showcerts </dev/null | grep -c 'BEGIN CERT'  # 2 이상",
+        "rem.tls.remote_problem": "원격 점검에서 인증서 체인 검증이 실패했습니다.",
+        "rem.tls.remote_loc": "원격: {target}",
+        "rem.tls.remote_fix": "웹서버의 인증서 설정을 fullchain(leaf + 중간 CA) 파일로 교체합니다.",
+        "rem.log.line": "{file}: {category} {count}건",
+        "rem.log.title": "침해 징후 확인: 워커 비정상 종료·메모리 한도 초과 로그",
+        "rem.log.problem": "공격 시도와 일반 버그 모두 원인이 될 수 있습니다. 발생 시점이 {since} 이후에 몰리는지, multipart POST 요청과 시각이 겹치는지 확인합니다.",
+        "rem.log.loc": "로그",
+        "rem.log.fix": "해당 시각의 access log에서 요청 경로·출발지를 대조합니다.",
+        "rem.recent.title": "침해 징후 확인: {since} 이후 변경된 .php 파일",
+        "rem.recent.problem": "배포에 의한 정상 변경일 수 있습니다. 배포 이력과 대조해 설명되지 않는 파일을 확인합니다.",
+        "rem.recent.count": "{n}개",
+        "rem.recent.partial": " (일부만 표시)",
+        # report (md / html shared)
+        "report.title": "PHP2Shell 노출 점검 보고서",
+        "lbl.host": "호스트",
+        "lbl.time": "점검 시각",
+        "lbl.tool": "점검 도구",
+        "lbl.basis": "판정 근거",
+        "lbl.condition": "조건",
+        "lbl.problem": "문제",
+        "lbl.current": "현재",
+        "lbl.location": "위치",
+        "lbl.fix": "조치",
+        "lbl.verify": "확인",
+        "lbl.impact": "영향",
+        "lbl.refs": "근거",
+        "col.target": "대상",
+        "col.pkgver": "패키지 버전",
+        "col.vstatus": "버전 판정",
+        "col.run": "실행",
+        "col.web": "웹서버",
+        "col.severity": "심각도",
+        "col.verdict": "판정",
+        "col.confidence": "신뢰도",
+        "col.fixed": "수정버전",
+        "col.rationale": "근거",
+        "unit.no_fe": "미확인",
+        "unit.running": "실행 중 (시작 {started})",
+        "unit.running_short": "실행 중",
+        "unit.stopped": "중지",
+        "unit.unknown": "확인 불가",
+        "prio.now": "즉시",
+        "prio.temp": "임시 완화",
+        "prio.hygiene": "정비",
+        "prio.check": "확인 필요",
+        "h.findings": "CVE별 판정",
+        "h.evidence": "판정 근거 (서빙 경로)",
+        "h.transparency": "투명성 부록",
+        "h.limits": "한계",
+        "no_checks": "점검한 로그와 웹루트에서 확인이 필요한 항목을 찾지 못했습니다. 공개된 IOC는 아직 없으므로({doc}:120) 이 결과가 침해되지 않았다는 증명은 아닙니다.",
+        "doc_note": "근거 표기의 DOC는 {doc}입니다.",
+        # report.md
+        "md.nondestructive": "비파괴: 실행 명령 0건, 네트워크 요청 0건",
+        "md.h.summary": "요약 (Executive Summary)",
+        "md.summary": "서빙 경로 **{units}개**에서 PHP2Shell(CVE-2026-109618 / CVE-2026-109619) {findings}건을 판정한 결과 **도달가능 {reachable}건**, 완화됨(임시) {mitigated}건, 판정보류 {undetermined}건, 패치됨 {patched}건입니다.",
+        "md.no_units": "**PHP 서빙 경로를 찾지 못했습니다.** 지원하지 않는 배치이거나 설정을 읽지 못했을 수 있습니다. '도달가능 0건'은 안전을 뜻하지 않습니다.",
+        "md.eol": "**패치가 존재하지 않는 PHP 브랜치가 서비스 중입니다** ({units}). 업그레이드 외에 수정 수단이 없으므로, 그때까지의 노출 축소를 결정해야 합니다.",
+        "md.temp_only": "설정 변경은 **임시 완화**입니다. PHP는 설정만으로 완전히 완화되지 않는다고 밝혔습니다({doc}:96). '완화됨(임시)'은 '안전'이 아닙니다.",
+        "md.compromise": "침해 징후 확인 항목 {n}건이 있습니다(§6). 판정이 아니라 확인이 필요한 근거입니다.",
+        "md.h.scope": "점검 대상 (서빙 경로)",
+        "md.h.remediation": "조치 사항 (Remediation)",
+        "md.rem_units": " (대상: {units})",
+        "md.h.compromise": "침해 징후 점검 (확인 필요)",
+        "md.loghit": "{file} {category} {count}건 — 최근 예: {sample}",
+        "md.tr.nondestructive": "**실행한 명령:** {cmds}건 · **네트워크 요청:** {net}건 · **쓰기:** 보고서 디렉터리({out})만",
+        "md.tr.read": "**읽은 파일:** {n}개 (전체 목록은 report.json `transparency.files_read`)",
+        "md.tr.denied": "**권한 부족으로 읽지 못한 파일:** {n}개",
+        "md.tr.limits": "**상한:** 설정 {conf}MiB, 로그 끝 {log}MiB, 웹루트 파일 {walk}개",
+        "md.lim.1": "설정 파일을 읽어 실효값을 계산합니다. 실행 중인 프로세스의 실제 값과 다를 수 있으며, 재시작 반영 여부는 파일 수정 시각으로 추정합니다.",
+        "md.lim.2": "Apache의 php_value/php_admin_value는 VirtualHost·Directory 구분 없이 전역으로 취급합니다.",
+        "md.lim.3": "RHEL 계열은 패키지 버전을 확인하지 못합니다(rpm DB 미해석). php-cgi, LiteSpeed, FrankenPHP는 점검하지 않습니다.",
+        "md.lim.4": "메모리 레이아웃·워커 재사용 등 익스플로잇 성공 조건(AC:H/AT:P)은 판정하지 않습니다.",
+        "md.h.ops": "운영 중인 구버전 PHP 서버 대응 안내",
+        # report.html
+        "kpi.units": "서빙 경로",
+        "html.cover_title": "PHP2Shell<br>노출 점검 보고서",
+        "html.cover_desc": "{host} 서버의 실제 서빙 경로(웹서버 → SAPI/FPM pool → PHP 빌드)와 실효 설정을 읽어 두 취약점의 성립 조건을 판정하고, 관리자가 적용할 조치를 파일·줄 단위로 제시합니다. 점검은 비파괴로 수행됐습니다.",
+        "html.no_units": "<b>PHP 서빙 경로를 찾지 못했습니다.</b> 지원하지 않는 배치이거나 설정을 읽지 못했을 수 있습니다. ‘도달가능 0건’은 안전을 뜻하지 않습니다.",
+        "html.eol": "<b>패치가 존재하지 않는 PHP 브랜치가 서비스 중입니다</b> ({units}). 업그레이드 외에 수정 수단이 없으므로 그때까지의 노출 축소를 결정해야 합니다.",
+        "html.temp_only": "설정 변경은 <b>임시 완화</b>입니다. PHP는 설정만으로 완전히 완화되지 않는다고 밝혔습니다({doc}:96). ‘완화됨(임시)’은 ‘안전’이 아닙니다.",
+        "html.compromise": "침해 징후 확인 항목 <b>{n}건</b>이 있습니다(06). 판정이 아니라 확인이 필요한 근거입니다.",
+        "html.criteria": "판정 기준",
+        "html.crit.reachable": "이 서버의 SAPI·실효 설정에서 문서가 확인한 공격 경로의 전제조건이 성립합니다.",
+        "html.crit.mitigated": "문서의 임시 완화 설정이 요청 파싱 전 단계에 적용돼 있습니다. 업그레이드 전까지의 조치입니다.",
+        "html.crit.undetermined": "근거가 부족하거나 설정을 읽지 못해 단정하지 않습니다. 도달불가가 아닙니다.",
+        "html.crit.patched": "수정 버전 이상이거나 패키지 changelog에 백포트 기록이 있습니다.",
+        "html.p1.title": "요약",
+        "html.p1.sub": "서빙 경로 {units}개 · 판정 {findings}건",
+        "html.p2.title": "점검 대상",
+        "html.p2.sub": "웹서버 → SAPI/FPM pool → PHP 빌드 단위로 판정합니다",
+        "html.p3.sub": "{cvss} · 두 CVE × 서빙 경로",
+        "html.rem_units": " · 대상 {units}",
+        "html.p4.title": "조치 사항",
+        "html.p4.sub": "우선순위 순 · 파일·줄 단위",
+        "html.no_rems": "조치할 항목이 없습니다.",
+        "html.count": "{n}건",
+        "html.tr.nd": "비파괴",
+        "html.tr.nd_text": "실행한 명령 {cmds}건 · 네트워크 요청 {net}건 · 쓰기는 보고서 디렉터리(<span class=\"mono\">{out}</span>)만",
+        "html.tr.read": "읽은 파일",
+        "html.tr.read_text": "{n}개 (전체 목록은 report.json)",
+        "html.tr.denied": "읽지 못한 파일",
+        "html.tr.denied_text": "{n}개 {files}",
+        "html.tr.limits_text": "설정 파일 기준 실효값이며 재시작 반영은 파일 수정 시각으로 추정합니다. Apache php_* 지시자는 전역으로 취급합니다. RHEL 계열 패키지 버전, php-cgi·LiteSpeed·FrankenPHP, 익스플로잇 성공 조건(AC:H/AT:P)은 판정하지 않습니다.",
+        "html.p5.title": "침해 징후 · 부록",
+        "html.p5.sub": "판정이 아닌 확인 항목 · 점검 방식 공개",
+        "html.p6.title": "운영 중인 구버전 서버 대응",
+        "html.p6.sub": "오늘 · 이번 주 · 업그레이드 경로 · 불가능할 때",
+        # operating guidance
+        "ops.intro": "업그레이드가 답이라는 것은 대개 이미 알고 있습니다. 문제는 운영 중인 서버를 그때까지 어떻게 다루느냐입니다.",
+        "ops.today": "1. 오늘: 서비스를 멈추지 않고 할 수 있는 일",
+        "ops.today.1": "인터넷에 공개된 PHP 경로와 업로드·관리 화면을 파악하고, 불필요한 공개부터 닫습니다.",
+        "ops.today.2": "§조치 사항의 임시 완화를 적용하고 모든 워커를 재시작합니다. 설정만으로는 완전히 완화되지 않습니다(DOC:96, :108).",
+        "ops.today.3": "웹서버·프록시 앞단에서 요청 크기·multipart 파트 수를 제한하고, multipart를 쓰지 않는 앱은 차단합니다(DOC:103, :105). WAF는 그 경로를 지나는 트래픽에만 효과가 있는 임시방편입니다(DOC:115).",
+        "ops.today.4": "침해 조사 범위는 공개일이 아니라 {since}부터 잡습니다(DOC:125). 로그가 없다고 안전한 것은 아닙니다(DOC:126).",
+        "ops.week": "2. 이번 주: 보안 수정이 들어간 패키지 확보",
+        "ops.week.1": "배포판·LTS 벤더 패키지의 보안 업데이트를 확인합니다. 배포판 패키지는 changelog로 백포트 여부를 확인합니다(DOC:69, :72, :172).",
+        "ops.week.2": "확장 지원 서비스(예: 배포판의 유료 확장 보안 지원, 상용 PHP 장기 지원)로 수정판을 받을 수 있는지 확인합니다. 제공 여부는 공급자에게 직접 확인해야 합니다.",
+        "ops.week.3": "PHP 7.3 이하는 PHP 측 패치와 소스 백포트가 없습니다(DOC:70). 이 단계를 건너뛰고 3·4단계로 갑니다.",
+        "ops.upgrade": "3. 업그레이드 경로: 중단 없이 옮기기",
+        "ops.upgrade.1": "목표는 보안 지원 중인 브랜치입니다. 8.2는 2026-12-31에 지원이 끝나므로 8.3 이상을 권장합니다(DOC:161).",
+        "ops.upgrade.2": "호환성은 정적 분석(예: PHP_CodeSniffer의 PHPCompatibility 규칙)과 자동 변환 도구(예: Rector)로 먼저 확인하고, 사용 중인 확장 모듈·프레임워크·CMS가 목표 버전을 지원하는지 확인합니다.",
+        "ops.upgrade.3": "새 버전을 별도 FPM pool이나 컨테이너로 나란히 띄워 스테이징 → 일부 트래픽 → 전체 전환 순으로 옮기고, 이전 버전으로 되돌릴 경로를 남겨 둡니다.",
+        "ops.cannot": "4. 당장 업그레이드할 수 없을 때",
+        "ops.cannot.1": "인터넷 직접 노출을 없애고, 접근 통제된 내부망·VPN 뒤로 옮기거나 꼭 필요한 기능만 리버스 프록시로 공개합니다.",
+        "ops.cannot.2": "CISA는 패치할 수 없거나 8.1 이하인 시스템의 오프라인 전환을 권고했습니다(DOC:114).",
+        "ops.cannot.3": "그래도 운영을 계속한다면 위험 수용을 문서로 남깁니다: 승인 책임자, 적용한 보완 통제, 재검토 기한.",
+        "ops.others": "5. 다른 조직의 서버에서 발견했을 때",
+        "ops.others.1": "허가 없이 직접 점검·검증하지 않습니다. 운영 주체나 공식 신고 채널(국내는 KISA 보호나라·KrCERT/CC)로 알립니다.",
+        "ops.others.2": "조치가 끝나기 전에는 취약 사실과 대상을 공개하지 않습니다.",
+        # command line
+        "cli.desc": "PHP2Shell 비파괴 내부 점검기 (서버에서 실행)",
+        "cli.root": "점검할 파일시스템 루트(오프라인 사본 분석용, 기본 /)",
+        "cli.out": "보고서 디렉터리(기본 ./php2shell_report_<호스트>)",
+        "cli.webroot": "웹서버 설정 외에 추가로 검사할 웹루트(여러 번 지정 가능)",
+        "cli.remote_json": "php2shell_remote.py --json 결과 파일(여러 번 지정 가능)",
+        "cli.since": "이 날짜 이후 변경된 .php를 표시(기본 {since})",
+        "cli.lang": "보고서 언어 ko|en|ja (기본 ko). php2shell_remote.py 결과도 같은 언어로 만드십시오",
+        "cli.no_etc": "오류: {root} 아래에 /etc가 없습니다.",
+        "cli.error": "오류: {kind}: {msg}",
+        "cli.summary": "서빙 경로 {units}개 · 도달가능 {reachable} · 완화됨(임시) {mitigated} · 판정보류 {undetermined} · 패치됨 {patched} · 침해 확인 항목 {checks}",
+        "cli.report": "보고서: {out}",
+        "cli.no_units": "경고: PHP 서빙 경로를 찾지 못했습니다. 지원하지 않는 배치이거나 설정을 읽지 못했을 수 있으며, '도달가능 0건'은 안전을 뜻하지 않습니다.",
+    },
+    "en": {
+        # parsing / units
+        "loc.default": "PHP default",
+        "note.admin_override": "{key}={value} in {loc} is ignored because it is overridden by the php_admin value in {admin_loc}.",
+        "fe.no_server_name": "(no server_name)",
+        "fe.global_name": "(global)",
+        "fe.global_loc": "Apache global configuration",
+        "fe.global_route": "global",
+        "pkg.distro": "official distribution package",
+        "pkg.unknown_origin": "unknown origin",
+        "vsrc.header": "header file {path} (official Docker image)",
+        "vsrc.remote": "remote header {source} ({target})",
+        "log.signal": "abnormal worker termination (signal)",
+        "log.segfault": "PHP process segfault",
+        "log.oom": "memory limit exceeded fatal",
+        # version status
+        "vs.no_branch": "Could not determine the PHP version (RHEL family or no package information).",
+        "vs.patched": "{version} ≥ fixed version {fixed}",
+        "vs.changelog_fix": "The package changelog ({path}) records a backport of {cves}.",
+        "vs.changelog_none": " No CVE backport recorded in changelog ({path}).",
+        "vs.eol": "PHP {branch} is EOL and no PHP2Shell patch exists (no source backport, {doc}:70).",
+        "vs.backport_only": "PHP {branch} has no official fixed release; only a source backport exists ({doc}:69).",
+        "vs.unknown_branch": "PHP {branch} is not a branch listed in the fixed-version table.",
+        "vs.no_version": "Could not determine the package version.",
+        "vs.vulnerable": "{version} < fixed version {fixed}.",
+        # evidence path / findings
+        "note.restart": "A configuration file was modified after the service started. Whether a restart or reload applied it cannot be confirmed (estimated from file mtime, DOC:108).",
+        "path.more": " and {n} more",
+        "path.no_frontend": "web server link not confirmed",
+        "path.no_vsrc": "no version source",
+        "set.locked": ", locked by php_admin",
+        "fixed.none_eol": "none (EOL)",
+        "verdict.reachable": "Reachable",
+        "verdict.mitigated": "Mitigated (temporary)",
+        "verdict.undetermined": "Undetermined",
+        "verdict.patched": "Patched",
+        "ev.no_frontend": "No web server configuration sending requests to this pool was found. External exposure must be checked separately.",
+        "ev.not_running": "This service process was not running at the time of the check.",
+        "ev.unreadable": "Configuration files that could not be read: {files}",
+        "ev.cond_patched": "patch applied",
+        "ev.remote_version": "The version is based on remote response headers. Confirm it with the server package.",
+        "ev.cond_idle": "SAPI={sapi}, service stopped, no web server link",
+        "ev.idle": "This installation was not handling requests at the time of the check. The same conditions apply once the service is started.",
+        "ev18.mitigated": "memory_limit=-1 removes the OOM abort path ({loc}).",
+        "ev18.not_locked": "It is not a php_admin value, so the app can set it back to a finite value (DOC:101).",
+        "ev18.modphp": "mod_php performs cleanup even after a request startup failure, so the attack succeeds before any app code runs (DOC:43).",
+        "ev18.fpm": "FPM terminates the worker on startup failure, which blocks this path, but analysis suggests it may be vulnerable after startup, so it cannot be declared unreachable (DOC:44).",
+        "ev18.override": "App/directory-level memory_limit change found: {setting}",
+        "ev18.incomplete": "Configuration files that could not be read may override the mitigation, so it is not judged as mitigated.",
+        "ev18.sink": "memory_limit exceeded during multipart parsing → cleanup of partially initialized data",
+        "ev19.late": "{setting} — {origin}/ini_set is applied too late to have any effect (DOC:108).",
+        "ev19.mitigated": "session.upload_progress.enabled=0 is set at a stage before request parsing ({loc}).",
+        "ev19.nginx": "nginx fastcgi_param PHP_VALUE is passed per request. Moving it to php_admin_value in the pool is recommended.",
+        "ev19.backtraces": "The mod_php + PHP 8.5 + fatal_error_backtraces enabled ({loc}) path holds (DOC:53).",
+        "ev19.upload_progress": "session.upload_progress is enabled ({loc}), so the session lifecycle path holds even without session_start(). Applies to both mod_php and FPM (DOC:54).",
+        "ev19.incomplete": "Some configuration files could not be read, so the effective value cannot be confirmed.",
+        "ev19.sink": "fatal error aborts cleanup → the next request on the same worker consumes stale state",
+        # remediation
+        "rem.restart_container": "docker restart <container>   # for containers, rebuilding and redeploying the image is the standard approach",
+        "rem.recheck": "sudo python3 php2shell_host.py  # re-run the check to confirm the verdict changed",
+        "rem.target_pool": "the [{pool}] section of {file}",
+        "rem.target_apache": "Apache configuration (e.g. /etc/apache2/conf-available/php2shell.conf, enable with a2enconf)",
+        "rem.add_to": "Add to {target}:",
+        "rem.cmd_php_v": "docker exec <container> php -v",
+        "rem.cmd_ps": "docker exec <container> ps -e",
+        "rem.eol.title": "PHP {branch}: branch with no patch available — decide how to reduce exposure",
+        "rem.eol.fix": "Independently of the upgrade schedule, decide how to reduce exposure until then.\n· Narrow external access (restrict access to admin screens and upload paths, check whether a WAF is in place)\n· Apply all temporary mitigation items below\n· CISA recommends taking systems that cannot be patched offline (DOC:114)",
+        "rem.eol.verify": "Record the decision and its scope",
+        "rem.bp.title": "PHP {branch}: check whether the package source provides a backport",
+        "rem.bp.fix_pkg": "Check the package source for security updates; if there are none, move to a supported branch.",
+        "rem.bp.fix_image": "Official images have no vendor backports. Move the base image to a supported-branch tag that includes the fix, then rebuild and redeploy.",
+        "rem.vuln.title": "Security update for {what}",
+        "rem.vuln.fix_image": "Move the base image to a tag at or above the fixed version (e.g. php:{fixed}-…), then rebuild and redeploy",
+        "rem.idle.title": "Clean up unused PHP {branch} installation",
+        "rem.idle.problem": "It is not running and has no web server link, but once started it will serve with the same vulnerable conditions.",
+        "rem.idle.current": "{what} {version} (service stopped)",
+        "rem.idle.purge": "Remove if not needed: sudo apt-get purge {package}",
+        "rem.idle.disable": "If keeping it, disable autostart: sudo systemctl disable --now {service}",
+        "rem.idle.container": "For containers, remove the service/CMD that starts this PHP from the image, or do not run it.",
+        "rem.pending.title": "Confirm the changed mitigation settings are loaded and restart",
+        "rem.pending.problem": "A mitigation configuration file was modified after the service started. Whether a reload applied it cannot be determined from the files alone (estimated from mtime).",
+        "rem.pending.impact": "Brief request failures possible during restart",
+        "rem.19.or_phpini": "(or change the {loc} line to 'session.upload_progress.enabled = Off')",
+        "rem.19.no_ini_set": "※ ini_set() and .user.ini have no effect",
+        "rem.19.up.title": "CVE-2026-109619 temporary mitigation: disable session.upload_progress",
+        "rem.19.up.problem": "Upload progress, enabled by default, opens the stale state consumption path.",
+        "rem.19.up.impact": "Session-based upload progress display will not work.",
+        "rem.19.bt.title": "CVE-2026-109619 temporary mitigation: disable fatal_error_backtraces (PHP 8.5)",
+        "rem.19.bt.problem": "Enabled by default in PHP 8.5; an RCE path has been confirmed with mod_php.",
+        "rem.18.pm_comment": "8M if uploads are not needed",
+        "rem.18.um_comment": "smaller than post_max_size",
+        "rem.18.memmax_intro": "memory_limit=-1 removes the per-request cap, so also set a service-level memory cap:",
+        "rem.18.memmax_value": "<value for this server's memory>",
+        "rem.18.container_mem": "Container memory limit: mem_limit in compose or docker run --memory",
+        "rem.18.no_rlimit": "(do not use RLIMIT_AS/RLIMIT_DATA)",
+        "rem.18.body_default": "1m (default)",
+        "rem.18.title": "CVE-2026-109618 temporary mitigation: lock memory_limit + limit request size",
+        "rem.18.problem": "When memory_limit is exceeded during multipart parsing, partially initialized request data is cleaned up and memory corruption occurs.",
+        "rem.18.problem_modphp": " With mod_php it succeeds before any app code runs.",
+        "rem.18.impact": "If the app does not use multipart, blocking multipart requests entirely in front of the web server is the most reliable option (DOC:105).",
+        "rem.ineffective.title": "Clean up ineffective mitigation settings",
+        "rem.ineffective.problem": "Settings in this location are applied after request parsing and have no effect.",
+        "rem.ineffective.fix": "Remove the line and move the setting to the pool/php.ini level.",
+        "rem.expose.title": "Stop exposing the PHP version header (expose_php)",
+        "rem.expose.problem": "X-Powered-By discloses the PHP version, which is used to select attack targets.",
+        "rem.expose.verify": "curl -sI https://<host>/ | grep -i x-powered-by   # should print nothing",
+        "rem.tls.title": "Incomplete TLS certificate chain (intermediate CA missing)",
+        "rem.tls.problem": "The server sends only the leaf certificate, so verification fails in Python, curl, and some mobile clients. Browsers compensate via AIA, so it looks fine.",
+        "rem.tls.current": "{cert}: 1 certificate",
+        "rem.tls.fix": "Replace with a fullchain file that appends the intermediate CA after the leaf:",
+        "rem.tls.verify": "openssl s_client -connect <host>:443 -servername <host> -showcerts </dev/null | grep -c 'BEGIN CERT'  # 2 or more",
+        "rem.tls.remote_problem": "Certificate chain verification failed during the remote check.",
+        "rem.tls.remote_loc": "remote: {target}",
+        "rem.tls.remote_fix": "Replace the web server's certificate setting with a fullchain (leaf + intermediate CA) file.",
+        "rem.log.line": "{file}: {category} {count} entries",
+        "rem.log.title": "Check for indicators of compromise: abnormal worker termination and memory limit exceeded logs",
+        "rem.log.problem": "Both attack attempts and ordinary bugs can cause these. Check whether occurrences cluster after {since} and whether their times coincide with multipart POST requests.",
+        "rem.log.loc": "logs",
+        "rem.log.fix": "Cross-check request paths and sources in the access log at those times.",
+        "rem.recent.title": "Check for indicators of compromise: .php files changed since {since}",
+        "rem.recent.problem": "These may be legitimate changes from deployments. Compare with the deployment history and check any files that cannot be explained.",
+        "rem.recent.count": "{n} files",
+        "rem.recent.partial": " (partial list)",
+        # report (md / html shared)
+        "report.title": "PHP2Shell Exposure Check Report",
+        "lbl.host": "Host",
+        "lbl.time": "Checked at",
+        "lbl.tool": "Tool",
+        "lbl.basis": "Basis",
+        "lbl.condition": "Condition",
+        "lbl.problem": "Problem",
+        "lbl.current": "Current",
+        "lbl.location": "Location",
+        "lbl.fix": "Fix",
+        "lbl.verify": "Verify",
+        "lbl.impact": "Impact",
+        "lbl.refs": "References",
+        "col.target": "Target",
+        "col.pkgver": "Package version",
+        "col.vstatus": "Version verdict",
+        "col.run": "Running",
+        "col.web": "Web server",
+        "col.severity": "Severity",
+        "col.verdict": "Verdict",
+        "col.confidence": "Confidence",
+        "col.fixed": "Fixed version",
+        "col.rationale": "Rationale",
+        "unit.no_fe": "not confirmed",
+        "unit.running": "running (started {started})",
+        "unit.running_short": "running",
+        "unit.stopped": "stopped",
+        "unit.unknown": "unknown",
+        "prio.now": "Immediate",
+        "prio.temp": "Temporary mitigation",
+        "prio.hygiene": "Hardening",
+        "prio.check": "Needs review",
+        "h.findings": "Verdicts by CVE",
+        "h.evidence": "Verdict basis (serving paths)",
+        "h.transparency": "Transparency appendix",
+        "h.limits": "Limitations",
+        "no_checks": "No items needing review were found in the inspected logs and webroots. No IOCs have been published yet ({doc}:120), so this result does not prove the system was not compromised.",
+        "doc_note": "DOC in the references refers to {doc}.",
+        # report.md
+        "md.nondestructive": "Non-destructive: 0 commands executed, 0 network requests",
+        "md.h.summary": "Executive Summary",
+        "md.summary": "Across **{units} serving paths**, {findings} PHP2Shell (CVE-2026-109618 / CVE-2026-109619) findings were assessed: **{reachable} Reachable**, {mitigated} Mitigated (temporary), {undetermined} Undetermined, {patched} Patched.",
+        "md.no_units": "**No PHP serving path was found.** The deployment may be unsupported or the configuration could not be read. '0 Reachable' does not mean safe.",
+        "md.eol": "**A PHP branch with no available patch is in service** ({units}). There is no fix other than upgrading, so decide how to reduce exposure until then.",
+        "md.temp_only": "Configuration changes are a **temporary mitigation**. PHP has stated that configuration alone does not fully mitigate ({doc}:96). 'Mitigated (temporary)' does not mean 'safe'.",
+        "md.compromise": "There are {n} indicator-of-compromise items to review (§6). They are evidence that needs review, not verdicts.",
+        "md.h.scope": "Inspection targets (serving paths)",
+        "md.h.remediation": "Remediation",
+        "md.rem_units": " (targets: {units})",
+        "md.h.compromise": "Indicators of compromise (needs review)",
+        "md.loghit": "{file} {category} {count} entries — recent example: {sample}",
+        "md.tr.nondestructive": "**Commands executed:** {cmds} · **Network requests:** {net} · **Writes:** report directory ({out}) only",
+        "md.tr.read": "**Files read:** {n} (full list in report.json `transparency.files_read`)",
+        "md.tr.denied": "**Files not read due to insufficient permissions:** {n}",
+        "md.tr.limits": "**Limits:** config {conf}MiB, log tail {log}MiB, webroot files {walk}",
+        "md.lim.1": "Effective values are computed by reading configuration files. They may differ from the actual values of the running process, and whether a restart applied them is estimated from file modification times.",
+        "md.lim.2": "Apache php_value/php_admin_value are treated globally, without distinguishing VirtualHost/Directory.",
+        "md.lim.3": "RHEL-family package versions cannot be checked (rpm DB not parsed). php-cgi, LiteSpeed, and FrankenPHP are not inspected.",
+        "md.lim.4": "Exploitation success conditions such as memory layout and worker reuse (AC:H/AT:P) are not assessed.",
+        "md.h.ops": "Guidance for running legacy PHP servers",
+        # report.html
+        "kpi.units": "Serving paths",
+        "html.cover_title": "PHP2Shell<br>Exposure Check Report",
+        "html.cover_desc": "Reads the actual serving paths (web server → SAPI/FPM pool → PHP build) and effective configuration of server {host}, determines whether the conditions for both vulnerabilities hold, and lists the remediation for administrators at file and line level. The check was performed non-destructively.",
+        "html.no_units": "<b>No PHP serving path was found.</b> The deployment may be unsupported or the configuration could not be read. '0 Reachable' does not mean safe.",
+        "html.eol": "<b>A PHP branch with no available patch is in service</b> ({units}). There is no fix other than upgrading, so decide how to reduce exposure until then.",
+        "html.temp_only": "Configuration changes are a <b>temporary mitigation</b>. PHP has stated that configuration alone does not fully mitigate ({doc}:96). 'Mitigated (temporary)' does not mean 'safe'.",
+        "html.compromise": "There are <b>{n} indicator-of-compromise items</b> to review (06). They are evidence that needs review, not verdicts.",
+        "html.criteria": "Verdict criteria",
+        "html.crit.reachable": "The preconditions of the attack path confirmed by the document hold given this server's SAPI and effective configuration.",
+        "html.crit.mitigated": "A temporary mitigation from the document is applied at a stage before request parsing. This is a measure until the upgrade.",
+        "html.crit.undetermined": "Not concluded due to insufficient evidence or unreadable configuration. This is not \"unreachable\".",
+        "html.crit.patched": "At or above the fixed version, or the package changelog records a backport.",
+        "html.p1.title": "Summary",
+        "html.p1.sub": "{units} serving paths · {findings} verdicts",
+        "html.p2.title": "Inspection targets",
+        "html.p2.sub": "Verdicts per web server → SAPI/FPM pool → PHP build",
+        "html.p3.sub": "{cvss} · two CVEs × serving paths",
+        "html.rem_units": " · targets {units}",
+        "html.p4.title": "Remediation",
+        "html.p4.sub": "By priority · file and line level",
+        "html.no_rems": "No items require action.",
+        "html.count": "{n} items",
+        "html.tr.nd": "Non-destructive",
+        "html.tr.nd_text": "{cmds} commands executed · {net} network requests · writes only to the report directory (<span class=\"mono\">{out}</span>)",
+        "html.tr.read": "Files read",
+        "html.tr.read_text": "{n} (full list in report.json)",
+        "html.tr.denied": "Files not read",
+        "html.tr.denied_text": "{n} {files}",
+        "html.tr.limits_text": "Effective values are based on configuration files, and whether a restart applied them is estimated from file modification times. Apache php_* directives are treated globally. RHEL-family package versions, php-cgi/LiteSpeed/FrankenPHP, and exploitation success conditions (AC:H/AT:P) are not assessed.",
+        "html.p5.title": "Indicators of compromise · Appendix",
+        "html.p5.sub": "Items to review, not verdicts · disclosure of the check method",
+        "html.p6.title": "Handling running legacy servers",
+        "html.p6.sub": "Today · This week · Upgrade path · When upgrading is impossible",
+        # operating guidance
+        "ops.intro": "Most people already know that upgrading is the answer. The problem is how to handle the running server until then.",
+        "ops.today": "1. Today: what you can do without stopping the service",
+        "ops.today.1": "Identify PHP paths and upload/admin screens exposed to the internet, and close unnecessary exposure first.",
+        "ops.today.2": "Apply the temporary mitigations in §Remediation and restart all workers. Configuration alone does not fully mitigate (DOC:96, :108).",
+        "ops.today.3": "Limit request size and the number of multipart parts in front of the web server/proxy, and block multipart for apps that do not use it (DOC:103, :105). A WAF is a stopgap that only affects traffic passing through it (DOC:115).",
+        "ops.today.4": "Scope the compromise investigation from {since}, not from the disclosure date (DOC:125). The absence of logs does not mean safe (DOC:126).",
+        "ops.week": "2. This week: obtain packages that include the security fix",
+        "ops.week.1": "Check distribution and LTS vendor packages for security updates. For distribution packages, check the changelog for backports (DOC:69, :72, :172).",
+        "ops.week.2": "Check whether a fixed build is available through extended support services (e.g. paid extended security support from the distribution, commercial PHP long-term support). Confirm availability directly with the provider.",
+        "ops.week.3": "PHP 7.3 and earlier have neither a PHP-side patch nor a source backport (DOC:70). Skip this step and go to steps 3 and 4.",
+        "ops.upgrade": "3. Upgrade path: migrate without downtime",
+        "ops.upgrade.1": "The target is a branch with active security support. 8.2 reaches end of support on 2026-12-31, so 8.3 or later is recommended (DOC:161).",
+        "ops.upgrade.2": "Check compatibility first with static analysis (e.g. the PHPCompatibility rules for PHP_CodeSniffer) and automated refactoring tools (e.g. Rector), and confirm that the extensions, frameworks, and CMS in use support the target version.",
+        "ops.upgrade.3": "Run the new version side by side in a separate FPM pool or container, migrate in the order staging → partial traffic → full cutover, and keep a path to roll back to the previous version.",
+        "ops.cannot": "4. When you cannot upgrade right away",
+        "ops.cannot.1": "Remove direct internet exposure: move the server behind an access-controlled internal network or VPN, or publish only the strictly necessary functions through a reverse proxy.",
+        "ops.cannot.2": "CISA has recommended taking systems that cannot be patched or run 8.1 or earlier offline (DOC:114).",
+        "ops.cannot.3": "If you still continue to operate it, document the risk acceptance: approving owner, compensating controls applied, and review deadline.",
+        "ops.others": "5. When you find it on another organization's server",
+        "ops.others.1": "Do not inspect or verify it directly without permission. Notify the operator or the official reporting channel of the system's country (e.g. CISA in the US, NCSC in the UK, JPCERT/CC in Japan, KISA / KrCERT/CC in Korea).",
+        "ops.others.2": "Do not disclose the vulnerability or the target until remediation is complete.",
+        # command line
+        "cli.desc": "PHP2Shell non-destructive internal checker (run on the server)",
+        "cli.root": "Filesystem root to inspect (for analyzing an offline copy, default /)",
+        "cli.out": "Report directory (default ./php2shell_report_<host>)",
+        "cli.webroot": "Additional webroot to inspect beyond the web server configuration (can be specified repeatedly)",
+        "cli.remote_json": "Output file of php2shell_remote.py --json (can be specified repeatedly)",
+        "cli.since": "Flag .php files changed after this date (default {since})",
+        "cli.lang": "Report language ko|en|ja (default ko). Generate php2shell_remote.py output in the same language",
+        "cli.no_etc": "Error: /etc not found under {root}.",
+        "cli.error": "Error: {kind}: {msg}",
+        "cli.summary": "{units} serving paths · Reachable {reachable} · Mitigated (temporary) {mitigated} · Undetermined {undetermined} · Patched {patched} · compromise review items {checks}",
+        "cli.report": "Report: {out}",
+        "cli.no_units": "Warning: No PHP serving path was found. The deployment may be unsupported or the configuration could not be read; '0 Reachable' does not mean safe.",
+    },
+    "ja": {
+        # parsing / units
+        "loc.default": "PHP既定値",
+        "note.admin_override": "{loc} の {key}={value} は {admin_loc} の php_admin 値によりブロックされ、無視されます。",
+        "fe.no_server_name": "（server_name なし）",
+        "fe.global_name": "（グローバル）",
+        "fe.global_loc": "apache グローバル設定",
+        "fe.global_route": "グローバル",
+        "pkg.distro": "ディストリ公式パッケージ",
+        "pkg.unknown_origin": "出典不明",
+        "vsrc.header": "ヘッダーファイル {path}（公式 Docker イメージ）",
+        "vsrc.remote": "リモートヘッダー {source}（{target}）",
+        "log.signal": "ワーカーの異常終了（signal）",
+        "log.segfault": "PHPプロセスの segfault",
+        "log.oom": "メモリ上限超過の fatal",
+        # version status
+        "vs.no_branch": "PHPバージョンを確認できませんでした（RHEL系、またはパッケージ情報なし）。",
+        "vs.patched": "{version} ≥ 修正バージョン {fixed}",
+        "vs.changelog_fix": "パッケージの changelog（{path}）に {cves} のバックポート記録があります。",
+        "vs.changelog_none": " changelog（{path}）にCVEのバックポート記録なし。",
+        "vs.eol": "PHP {branch} はEOLで、PHP2Shellのパッチは存在しません（ソースバックポートなし、{doc}:70）。",
+        "vs.backport_only": "PHP {branch} は公式の修正リリースがなく、ソースバックポートのみがあります（{doc}:69）。",
+        "vs.unknown_branch": "PHP {branch} は修正基準表にないブランチです。",
+        "vs.no_version": "パッケージバージョンを確認できませんでした。",
+        "vs.vulnerable": "{version} < 修正バージョン {fixed}。",
+        # evidence path / findings
+        "note.restart": "設定ファイルがサービス起動後に変更されています。再起動・リロードで反映されたかは確認できません（ファイルの mtime からの推定、DOC:108）。",
+        "path.more": " ほか{n}個",
+        "path.no_frontend": "Webサーバーとの接続未確認",
+        "path.no_vsrc": "バージョンの出典なし",
+        "set.locked": "、php_admin ロック",
+        "fixed.none_eol": "なし（EOL）",
+        "verdict.reachable": "到達可能",
+        "verdict.mitigated": "緩和済み（一時的）",
+        "verdict.undetermined": "判定保留",
+        "verdict.patched": "パッチ済み",
+        "ev.no_frontend": "この pool にリクエストを送るWebサーバー設定が見つかりませんでした。外部への露出有無は別途確認が必要です。",
+        "ev.not_running": "点検時点でこのサービスのプロセスは実行されていませんでした。",
+        "ev.unreadable": "読み取れなかった設定ファイル: {files}",
+        "ev.cond_patched": "パッチ適用済み",
+        "ev.remote_version": "バージョンはリモート応答ヘッダーに基づきます。サーバーのパッケージで確認してください。",
+        "ev.cond_idle": "SAPI={sapi}、サービス停止・Webサーバー接続なし",
+        "ev.idle": "点検時点でリクエストを処理していないインストールです。サービスを起動すると同じ条件が適用されます。",
+        "ev18.mitigated": "memory_limit=-1 によりOOM中断経路が除去されています（{loc}）。",
+        "ev18.not_locked": "php_admin 値ではないため、アプリが再び有限値に変更できます（DOC:101）。",
+        "ev18.modphp": "mod_php は request startup の失敗後も cleanup を実行するため、アプリコードの実行前に攻撃が成立します（DOC:43）。",
+        "ev18.fpm": "FPMは startup 失敗時にワーカーを終了するためこの経路は遮断されますが、startup 以降に脆弱となり得るという分析があり、到達不可とは断定できません（DOC:44）。",
+        "ev18.override": "アプリ/ディレクトリ単位の memory_limit 変更を検出: {setting}",
+        "ev18.incomplete": "読み取れなかった設定ファイルが緩和設定を上書きする可能性があるため、緩和済みとは判定しません。",
+        "ev18.sink": "multipart 解析中の memory_limit 超過 → 部分的に初期化されたデータの解放",
+        "ev19.late": "{setting} — {origin}/ini_set は適用タイミングが遅いため効果がありません（DOC:108）。",
+        "ev19.mitigated": "session.upload_progress.enabled=0 がリクエスト解析前の段階で設定されています（{loc}）。",
+        "ev19.nginx": "nginx の fastcgi_param PHP_VALUE はリクエスト単位で渡されます。pool の php_admin_value に移すことを推奨します。",
+        "ev19.backtraces": "mod_php + PHP 8.5 + fatal_error_backtraces 有効（{loc}）の経路が成立します（DOC:53）。",
+        "ev19.upload_progress": "session.upload_progress が有効（{loc}）なため、session_start() なしでもセッションのライフサイクル経路が成立します。mod_php・FPMの両方が該当します（DOC:54）。",
+        "ev19.incomplete": "設定ファイルの一部を読み取れなかったため、実効値を確定できません。",
+        "ev19.sink": "fatal error で解放処理が中断 → 同じワーカーの次のリクエストが stale state を消費",
+        # remediation
+        "rem.restart_container": "docker restart <コンテナ>   # コンテナの場合はイメージの再ビルド・再デプロイが原則",
+        "rem.recheck": "sudo python3 php2shell_host.py  # 再点検で判定の変化を確認",
+        "rem.target_pool": "{file} の [{pool}] セクション",
+        "rem.target_apache": "Apache設定（例：/etc/apache2/conf-available/php2shell.conf、a2enconf で有効化）",
+        "rem.add_to": "{target}に追加:",
+        "rem.cmd_php_v": "docker exec <コンテナ> php -v",
+        "rem.cmd_ps": "docker exec <コンテナ> ps -e",
+        "rem.eol.title": "PHP {branch}: パッチが存在しないブランチ — 露出縮小の判断",
+        "rem.eol.fix": "アップグレードの日程とは別に、それまでの露出を減らす判断が必要です。\n· 外部アクセス範囲の縮小（管理画面・アップロード経路へのアクセス制限、WAF適用有無の確認）\n· 下記の一時緩和項目をすべて適用\n· CISAはパッチできないシステムのオフライン化を勧告（DOC:114）",
+        "rem.eol.verify": "決定事項と適用範囲を記録",
+        "rem.bp.title": "PHP {branch}: パッケージ提供元でバックポートの有無を確認",
+        "rem.bp.fix_pkg": "パッケージ提供元のセキュリティアップデートを確認し、なければサポート対象ブランチに移行します。",
+        "rem.bp.fix_image": "公式イメージにはベンダーのバックポートがありません。修正を含むサポート対象ブランチのタグにベースイメージを上げ、再ビルド・再デプロイします。",
+        "rem.vuln.title": "{what} のセキュリティアップデート",
+        "rem.vuln.fix_image": "ベースイメージを修正バージョン以上のタグ（例：php:{fixed}-…）に上げて再ビルド・デプロイ",
+        "rem.idle.title": "未使用の PHP {branch} インストールの整理",
+        "rem.idle.problem": "実行されておらずWebサーバーとの接続もありませんが、起動すると同じ脆弱な条件でサービスされます。",
+        "rem.idle.current": "{what} {version}（サービス停止）",
+        "rem.idle.purge": "不要なら削除: sudo apt-get purge {package}",
+        "rem.idle.disable": "残す場合は自動起動を解除: sudo systemctl disable --now {service}",
+        "rem.idle.container": "コンテナの場合は、このPHPを起動するサービス/CMDをイメージから削除するか、実行しないようにします。",
+        "rem.pending.title": "変更した緩和設定が読み込まれたかを確認・再起動",
+        "rem.pending.problem": "緩和設定ファイルがサービス起動後に変更されています。reload で反映されたかはファイルだけでは判断できません（mtime からの推定）。",
+        "rem.pending.impact": "再起動中に短時間リクエストが失敗する可能性",
+        "rem.19.or_phpini": "（または {loc} の行を 'session.upload_progress.enabled = Off' に変更）",
+        "rem.19.no_ini_set": "※ ini_set()・.user.ini では効果なし",
+        "rem.19.up.title": "CVE-2026-109619 一時緩和: session.upload_progress の無効化",
+        "rem.19.up.problem": "既定で有効な upload progress が stale state 消費の経路を開きます。",
+        "rem.19.up.impact": "セッションベースのアップロード進捗表示機能が動作しなくなります。",
+        "rem.19.bt.title": "CVE-2026-109619 一時緩和: fatal_error_backtraces の無効化（PHP 8.5）",
+        "rem.19.bt.problem": "PHP 8.5 の既定値で有効であり、mod_php ではRCE経路が確認されています。",
+        "rem.18.pm_comment": "アップロード不要なら 8M",
+        "rem.18.um_comment": "post_max_size より小さく",
+        "rem.18.memmax_intro": "memory_limit=-1 はリクエストごとの上限をなくすため、サービス単位のメモリ上限を併せて設定します:",
+        "rem.18.memmax_value": "<サーバーのメモリに合った値>",
+        "rem.18.container_mem": "コンテナのメモリ制限: compose の mem_limit または docker run --memory",
+        "rem.18.no_rlimit": "（RLIMIT_AS/RLIMIT_DATA は使用しません）",
+        "rem.18.body_default": "1m（既定値）",
+        "rem.18.title": "CVE-2026-109618 一時緩和: memory_limit のロック + リクエストサイズ制限",
+        "rem.18.problem": "multipart 解析中の memory_limit 超過により、部分的に初期化されたリクエストデータが解放され、メモリ破損が発生します。",
+        "rem.18.problem_modphp": " mod_php ではアプリコードの実行前に成立します。",
+        "rem.18.impact": "アプリが multipart を使用しない場合は、Webサーバーの前段で multipart リクエスト自体を遮断するのが最も確実です（DOC:105）。",
+        "rem.ineffective.title": "効果のない緩和設定の整理",
+        "rem.ineffective.problem": "この場所の設定はリクエスト解析後に適用されるため、効果がありません。",
+        "rem.ineffective.fix": "該当行を削除し、pool/php.ini レベルの設定に移します。",
+        "rem.expose.title": "PHPバージョンヘッダーの露出防止（expose_php）",
+        "rem.expose.problem": "X-Powered-By でPHPバージョンが公開され、攻撃対象の選別に使われます。",
+        "rem.expose.verify": "curl -sI https://<ホスト>/ | grep -i x-powered-by   # 出力がないこと",
+        "rem.tls.title": "TLS証明書チェーンの欠落（中間CA未同梱）",
+        "rem.tls.problem": "サーバーが leaf 証明書のみを送信するため、Python・curl・一部のモバイルクライアントで検証に失敗します。ブラウザはAIAで補完するため正常に見えます。",
+        "rem.tls.current": "{cert}: 証明書1個",
+        "rem.tls.fix": "leaf の後ろに中間CAを連結した fullchain ファイルに置き換え:",
+        "rem.tls.verify": "openssl s_client -connect <ホスト>:443 -servername <ホスト> -showcerts </dev/null | grep -c 'BEGIN CERT'  # 2以上",
+        "rem.tls.remote_problem": "リモート点検で証明書チェーンの検証に失敗しました。",
+        "rem.tls.remote_loc": "リモート: {target}",
+        "rem.tls.remote_fix": "Webサーバーの証明書設定を fullchain（leaf + 中間CA）ファイルに置き換えます。",
+        "rem.log.line": "{file}: {category} {count}件",
+        "rem.log.title": "侵害の痕跡の確認: ワーカーの異常終了・メモリ上限超過のログ",
+        "rem.log.problem": "攻撃の試行と通常のバグのどちらも原因になり得ます。発生時刻が {since} 以降に集中しているか、multipart POST リクエストと時刻が重なるかを確認します。",
+        "rem.log.loc": "ログ",
+        "rem.log.fix": "該当時刻の access log でリクエストパス・送信元を照合します。",
+        "rem.recent.title": "侵害の痕跡の確認: {since} 以降に変更された .php ファイル",
+        "rem.recent.problem": "デプロイによる正常な変更の可能性があります。デプロイ履歴と照合し、説明のつかないファイルを確認します。",
+        "rem.recent.count": "{n}個",
+        "rem.recent.partial": " （一部のみ表示）",
+        # report (md / html shared)
+        "report.title": "PHP2Shell 露出点検レポート",
+        "lbl.host": "ホスト",
+        "lbl.time": "点検日時",
+        "lbl.tool": "点検ツール",
+        "lbl.basis": "判定根拠",
+        "lbl.condition": "条件",
+        "lbl.problem": "問題",
+        "lbl.current": "現在",
+        "lbl.location": "場所",
+        "lbl.fix": "対処",
+        "lbl.verify": "確認",
+        "lbl.impact": "影響",
+        "lbl.refs": "根拠",
+        "col.target": "対象",
+        "col.pkgver": "パッケージバージョン",
+        "col.vstatus": "バージョン判定",
+        "col.run": "実行",
+        "col.web": "Webサーバー",
+        "col.severity": "深刻度",
+        "col.verdict": "判定",
+        "col.confidence": "信頼度",
+        "col.fixed": "修正バージョン",
+        "col.rationale": "根拠",
+        "unit.no_fe": "未確認",
+        "unit.running": "実行中（起動 {started}）",
+        "unit.running_short": "実行中",
+        "unit.stopped": "停止",
+        "unit.unknown": "確認不可",
+        "prio.now": "即時",
+        "prio.temp": "一時緩和",
+        "prio.hygiene": "整備",
+        "prio.check": "要確認",
+        "h.findings": "CVE別の判定",
+        "h.evidence": "判定根拠（サービング経路）",
+        "h.transparency": "透明性付録",
+        "h.limits": "制限",
+        "no_checks": "点検したログとwebrootで確認が必要な項目は見つかりませんでした。公開されたIOCはまだないため（{doc}:120）、この結果は侵害されていないことの証明ではありません。",
+        "doc_note": "根拠表記の DOC は {doc} です。",
+        # report.md
+        "md.nondestructive": "非破壊: 実行コマンド0件、ネットワークリクエスト0件",
+        "md.h.summary": "サマリー（Executive Summary）",
+        "md.summary": "サービング経路 **{units}個** で PHP2Shell（CVE-2026-109618 / CVE-2026-109619）{findings}件を判定した結果、**到達可能 {reachable}件**、緩和済み（一時的） {mitigated}件、判定保留 {undetermined}件、パッチ済み {patched}件です。",
+        "md.no_units": "**PHPのサービング経路が見つかりませんでした。** 非対応の構成であるか、設定を読み取れなかった可能性があります。「到達可能 0件」は安全を意味しません。",
+        "md.eol": "**パッチが存在しないPHPブランチがサービス中です**（{units}）。アップグレード以外に修正手段がないため、それまでの露出縮小を判断する必要があります。",
+        "md.temp_only": "設定変更は **一時緩和** です。PHPは設定だけでは完全には緩和されないと明言しています（{doc}:96）。「緩和済み（一時的）」は「安全」ではありません。",
+        "md.compromise": "侵害の痕跡の確認項目が {n}件あります（§6）。判定ではなく、確認が必要な根拠です。",
+        "md.h.scope": "点検対象（サービング経路）",
+        "md.h.remediation": "対処事項（Remediation）",
+        "md.rem_units": " （対象: {units}）",
+        "md.h.compromise": "侵害の痕跡の点検（要確認）",
+        "md.loghit": "{file} {category} {count}件 — 最近の例: {sample}",
+        "md.tr.nondestructive": "**実行したコマンド:** {cmds}件 · **ネットワークリクエスト:** {net}件 · **書き込み:** レポートディレクトリ（{out}）のみ",
+        "md.tr.read": "**読み取ったファイル:** {n}個（全一覧は report.json `transparency.files_read`）",
+        "md.tr.denied": "**権限不足で読み取れなかったファイル:** {n}個",
+        "md.tr.limits": "**上限:** 設定 {conf}MiB、ログ末尾 {log}MiB、webrootファイル {walk}個",
+        "md.lim.1": "設定ファイルを読み取って実効値を計算します。実行中のプロセスの実際の値とは異なる場合があり、再起動による反映の有無はファイルの変更日時から推定します。",
+        "md.lim.2": "Apache の php_value/php_admin_value は VirtualHost・Directory の区別なくグローバルとして扱います。",
+        "md.lim.3": "RHEL系はパッケージバージョンを確認できません（rpm DB 未解析）。php-cgi、LiteSpeed、FrankenPHP は点検しません。",
+        "md.lim.4": "メモリレイアウト・ワーカーの再利用などエクスプロイト成功条件（AC:H/AT:P）は判定しません。",
+        "md.h.ops": "運用中の旧バージョンPHPサーバーへの対応案内",
+        # report.html
+        "kpi.units": "サービング経路",
+        "html.cover_title": "PHP2Shell<br>露出点検レポート",
+        "html.cover_desc": "{host} サーバーの実際のサービング経路（Webサーバー → SAPI/FPM pool → PHPビルド）と実効設定を読み取って2つの脆弱性の成立条件を判定し、管理者が適用すべき対処をファイル・行単位で提示します。点検は非破壊で実施しました。",
+        "html.no_units": "<b>PHPのサービング経路が見つかりませんでした。</b> 非対応の構成であるか、設定を読み取れなかった可能性があります。「到達可能 0件」は安全を意味しません。",
+        "html.eol": "<b>パッチが存在しないPHPブランチがサービス中です</b>（{units}）。アップグレード以外に修正手段がないため、それまでの露出縮小を判断する必要があります。",
+        "html.temp_only": "設定変更は <b>一時緩和</b> です。PHPは設定だけでは完全には緩和されないと明言しています（{doc}:96）。「緩和済み（一時的）」は「安全」ではありません。",
+        "html.compromise": "侵害の痕跡の確認項目が <b>{n}件</b> あります（06）。判定ではなく、確認が必要な根拠です。",
+        "html.criteria": "判定基準",
+        "html.crit.reachable": "このサーバーのSAPI・実効設定で、ドキュメントが確認した攻撃経路の前提条件が成立します。",
+        "html.crit.mitigated": "ドキュメントの一時緩和設定がリクエスト解析前の段階に適用されています。アップグレードまでの措置です。",
+        "html.crit.undetermined": "根拠不足または設定の読み取り失敗のため断定しません。到達不可という意味ではありません。",
+        "html.crit.patched": "修正バージョン以上であるか、パッケージの changelog にバックポート記録があります。",
+        "html.p1.title": "サマリー",
+        "html.p1.sub": "サービング経路 {units}個 · 判定 {findings}件",
+        "html.p2.title": "点検対象",
+        "html.p2.sub": "Webサーバー → SAPI/FPM pool → PHPビルドの単位で判定します",
+        "html.p3.sub": "{cvss} · 2つのCVE × サービング経路",
+        "html.rem_units": " · 対象 {units}",
+        "html.p4.title": "対処事項",
+        "html.p4.sub": "優先順位順 · ファイル・行単位",
+        "html.no_rems": "対処が必要な項目はありません。",
+        "html.count": "{n}件",
+        "html.tr.nd": "非破壊",
+        "html.tr.nd_text": "実行したコマンド {cmds}件 · ネットワークリクエスト {net}件 · 書き込みはレポートディレクトリ（<span class=\"mono\">{out}</span>）のみ",
+        "html.tr.read": "読み取ったファイル",
+        "html.tr.read_text": "{n}個（全一覧は report.json）",
+        "html.tr.denied": "読み取れなかったファイル",
+        "html.tr.denied_text": "{n}個 {files}",
+        "html.tr.limits_text": "設定ファイルに基づく実効値であり、再起動による反映はファイルの変更日時から推定します。Apache の php_* ディレクティブはグローバルとして扱います。RHEL系のパッケージバージョン、php-cgi・LiteSpeed・FrankenPHP、エクスプロイト成功条件（AC:H/AT:P）は判定しません。",
+        "html.p5.title": "侵害の痕跡 · 付録",
+        "html.p5.sub": "判定ではない確認項目 · 点検方式の公開",
+        "html.p6.title": "運用中の旧バージョンサーバーへの対応",
+        "html.p6.sub": "今日 · 今週 · アップグレード経路 · 不可能な場合",
+        # operating guidance
+        "ops.intro": "アップグレードが答えであることは、たいてい既に分かっています。問題は、運用中のサーバーをそれまでどう扱うかです。",
+        "ops.today": "1. 今日: サービスを止めずにできること",
+        "ops.today.1": "インターネットに公開されているPHPの経路とアップロード・管理画面を把握し、不要な公開から閉じます。",
+        "ops.today.2": "§対処事項の一時緩和を適用し、すべてのワーカーを再起動します。設定だけでは完全には緩和されません（DOC:96, :108）。",
+        "ops.today.3": "Webサーバー・プロキシの前段でリクエストサイズ・multipart のパート数を制限し、multipart を使わないアプリでは遮断します（DOC:103, :105）。WAFはその経路を通過するトラフィックにのみ有効な一時しのぎです（DOC:115）。",
+        "ops.today.4": "侵害調査の範囲は公開日ではなく {since} から取ります（DOC:125）。ログがないからといって安全とは限りません（DOC:126）。",
+        "ops.week": "2. 今週: セキュリティ修正を含むパッケージの確保",
+        "ops.week.1": "ディストリ・LTSベンダーのパッケージのセキュリティアップデートを確認します。ディストリのパッケージは changelog でバックポートの有無を確認します（DOC:69, :72, :172）。",
+        "ops.week.2": "延長サポートサービス（例：ディストリの有償延長セキュリティサポート、商用PHPの長期サポート）で修正版を入手できるか確認します。提供の有無は提供元に直接確認する必要があります。",
+        "ops.week.3": "PHP 7.3 以下はPHP側のパッチもソースバックポートもありません（DOC:70）。この段階を飛ばして3・4段階に進みます。",
+        "ops.upgrade": "3. アップグレード経路: 無停止で移行する",
+        "ops.upgrade.1": "目標はセキュリティサポート中のブランチです。8.2 は 2026-12-31 にサポートが終了するため、8.3 以上を推奨します（DOC:161）。",
+        "ops.upgrade.2": "互換性は静的解析（例：PHP_CodeSniffer の PHPCompatibility ルール）と自動変換ツール（例：Rector）でまず確認し、使用中の拡張モジュール・フレームワーク・CMSが目標バージョンをサポートしているか確認します。",
+        "ops.upgrade.3": "新バージョンを別の FPM pool やコンテナで並行して立ち上げ、ステージング → 一部トラフィック → 全面切り替えの順に移行し、旧バージョンに戻す経路を残しておきます。",
+        "ops.cannot": "4. すぐにアップグレードできない場合",
+        "ops.cannot.1": "インターネットへの直接露出をなくし、アクセス制御された内部ネットワーク・VPNの背後に移すか、必要な機能だけをリバースプロキシで公開します。",
+        "ops.cannot.2": "CISAは、パッチできない、または 8.1 以下のシステムのオフライン化を勧告しました（DOC:114）。",
+        "ops.cannot.3": "それでも運用を続ける場合は、リスク受容を文書に残します: 承認責任者、適用した補完的統制、再検討期限。",
+        "ops.others": "5. 他組織のサーバーで発見した場合",
+        "ops.others.1": "許可なく直接点検・検証しません。運用主体または公式の届出窓口（日本ではIPA・JPCERT/CC、韓国ではKISA・KrCERT/CC）に通知します。",
+        "ops.others.2": "対処が完了するまでは、脆弱性の事実と対象を公開しません。",
+        # command line
+        "cli.desc": "PHP2Shell 非破壊内部点検ツール（サーバー上で実行）",
+        "cli.root": "点検するファイルシステムのルート（オフラインコピーの解析用、既定値 /）",
+        "cli.out": "レポートディレクトリ（既定値 ./php2shell_report_<ホスト>）",
+        "cli.webroot": "Webサーバー設定以外に追加で検査するwebroot（繰り返し指定可能）",
+        "cli.remote_json": "php2shell_remote.py --json の結果ファイル（繰り返し指定可能）",
+        "cli.since": "この日付以降に変更された .php を表示（既定値 {since}）",
+        "cli.lang": "レポート言語 ko|en|ja（既定値 ko）。php2shell_remote.py の結果も同じ言語で作成してください",
+        "cli.no_etc": "エラー: {root} の下に /etc がありません。",
+        "cli.error": "エラー: {kind}: {msg}",
+        "cli.summary": "サービング経路 {units}個 · 到達可能 {reachable} · 緩和済み（一時的） {mitigated} · 判定保留 {undetermined} · パッチ済み {patched} · 侵害確認項目 {checks}",
+        "cli.report": "レポート: {out}",
+        "cli.no_units": "警告: PHPのサービング経路が見つかりませんでした。非対応の構成であるか、設定を読み取れなかった可能性があり、「到達可能 0件」は安全を意味しません。",
+    },
+}
 
 
 if __name__ == "__main__":

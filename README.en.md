@@ -31,6 +31,10 @@ sudo python3 php2shell_host.py
 python3 php2shell_remote.py https://example.com/ --json > remote.json
 sudo python3 php2shell_host.py --remote-json remote.json
 
+# English / Japanese report (run the remote check in the same language)
+python3 php2shell_remote.py https://example.com/ --json --lang en > remote.json
+sudo python3 php2shell_host.py --remote-json remote.json --lang en
+
 # Add a webroot not present in the web server config, and set the report location
 sudo python3 php2shell_host.py --webroot /srv/app --out /tmp/php2shell_report
 
@@ -45,10 +49,11 @@ python3 php2shell_host.py --root /mnt/server-copy
 | `--webroot` | none | Additional webroot to inspect (can be specified repeatedly) |
 | `--remote-json` | none | Output of `php2shell_remote.py --json` (can be specified repeatedly) |
 | `--since` | `2026-10-17` | Flag `.php` files changed after this date as items to verify for compromise (date of first observed attack) |
+| `--lang` | `ko` | Language of the report and console output (`ko`, `en`, `ja`). The report quotes the remote result's reason verbatim, so run `php2shell_remote.py` with the same `--lang`. |
 
 ### Output
 
-`report.json` (machine-readable), `report_ko.md` (for attaching to mail/issues), `report.html` (for A4 printing). Report structure: summary → inspection targets (serving paths) → per-CVE verdicts and supporting paths → remediation (file/line level, verification commands, impact) → indicators of compromise (needs verification) → transparency appendix.
+`report.json` (machine-readable), `report_<lang>.md` (for attaching to mail/issues), `report_<lang>.html` (for A4 printing), where `<lang>` is the `--lang` value. Code values in `report.json` (`verdict`, `priority`, `version_status`, …) are language neutral; prose fields (`rationale`, `notes`, …) are written in the `--lang` language. For compatibility the verdict label field keeps the name `verdict_ko`; its value is in the `--lang` language. Citations of the basis document (`DOC:NN`) point at the translation for that language, which keeps the original's line numbers. Report structure: summary → inspection targets (serving paths) → per-CVE verdicts and supporting paths → remediation (file/line level, verification commands, impact) → indicators of compromise (needs verification) → transparency appendix.
 
 ### Verdicts
 
@@ -94,6 +99,7 @@ python3 php2shell_remote.py <URL> [--timeout seconds] [--max-bytes bytes] [--caf
 | `--cafile` | none | A CA / intermediate CA certificate file to trust **in addition to** the system trust store. PEM and DER both work. Verification is kept. |
 | `--insecure` | off | Skips HTTPS certificate / hostname verification. Use only on internal test servers with a private certificate. Takes precedence over `--cafile`. |
 | `--json` | off | Outputs the result as JSON. |
+| `--lang` | `ko` | Language of `reason`, `notes` and console output (`ko`, `en`, `ja`). `status` is a language-neutral code. |
 
 ### Examples
 
@@ -138,13 +144,13 @@ If Korean text is garbled on Windows, set `PYTHONIOENCODING=utf-8`, or run `$env
 
 ```text
 Verdict: likely_vulnerable
-Reason: PHP 8.2.10 is below the document's fixed version 8.2.35.
+Reason: PHP 8.2.10 is below the fixed version 8.2.35 in the document.
 HTTP: 403
 X-Powered-By: PHP/8.2.10
 PHP: 8.2.10 (source: X-Powered-By)
-- Only a non-destructive GET request was performed.
-- Version-based judgment alone cannot confirm actual reachability or a distribution backport.
-- The verdict was made from the headers of an HTTP error response (403 Forbidden).
+- Only non-destructive GET requests were made.
+- A version verdict alone cannot confirm actual reachability or distribution backports.
+- Assessed from the headers of an HTTP error response (403 Forbidden).
 ```
 
 JSON output fields: `target`, `status`, `reason`, `http_status`, `detected_version`, `version_source`, `server`, `powered_by`, `final_url`, `redirects`, `notes`.
@@ -190,6 +196,7 @@ It brings up 8 sites with Docker, each differing in PHP version, SAPI, package l
 ```bash
 cd lab
 ./run.sh                 # Windows Git Bash: PYTHON=python ./run.sh
+REPORT_LANG=en ./run.sh  # run with English (en) or Japanese (ja) output
 cat out/summary.txt      # per-site remote verdict and host-check summary
 docker compose down
 ```
@@ -204,7 +211,9 @@ docker compose down
 | 8336 | Official `php:8.3.36-fpm` · nginx | Fixed version, official-image layout |
 | 8426 / 8427 | Official `php:8.4.26/27-apache` | mod_php just before / after the fix |
 
-[docs/sample-report/](docs/sample-report/) is a real report generated from one site in this lab.
+[docs/sample-report/](docs/sample-report/) is a real report generated from one site (7403) in this lab (`.md`/`.html` as `report_ko`, `report_en`, `report_ja`; `report.json` is ko).
+
+After editing a message catalog, run `python lab/check_i18n.py` to confirm that keys and placeholders match across the three languages.
 
 ## Author
 

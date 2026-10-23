@@ -4,8 +4,8 @@ __pycache__/
 # Scan results contain target vulnerability data (see LEGAL.md §4)
 php2shell_report_*/
 report.json
-report_ko.md
-report.html
+report_*.md
+report_*.html
 remote*.json
 targets.txt
 

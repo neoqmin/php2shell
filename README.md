@@ -31,6 +31,10 @@ sudo python3 php2shell_host.py
 python3 php2shell_remote.py https://example.com/ --json > remote.json
 sudo python3 php2shell_host.py --remote-json remote.json
 
+# 영어·일본어 보고서 (원격 점검도 같은 언어로 실행)
+python3 php2shell_remote.py https://example.com/ --json --lang en > remote.json
+sudo python3 php2shell_host.py --remote-json remote.json --lang en
+
 # 웹서버 설정에 없는 웹루트 추가, 보고서 위치 지정
 sudo python3 php2shell_host.py --webroot /srv/app --out /tmp/php2shell_report
 
@@ -45,10 +49,11 @@ python3 php2shell_host.py --root /mnt/server-copy
 | `--webroot` | 없음 | 추가로 검사할 웹루트(반복 지정 가능) |
 | `--remote-json` | 없음 | `php2shell_remote.py --json` 결과(반복 지정 가능) |
 | `--since` | `2026-10-17` | 이 날짜 이후 변경된 `.php`를 침해 확인 항목으로 표시(첫 공격 관측일) |
+| `--lang` | `ko` | 보고서·화면 출력 언어(`ko`·`en`·`ja`). 보고서는 원격 결과의 사유 문장을 그대로 옮기므로 `php2shell_remote.py`도 같은 `--lang`으로 실행하십시오. |
 
 ### 산출물
 
-`report.json`(기계 판독), `report_ko.md`(메일·이슈 첨부용), `report.html`(A4 인쇄용). 보고서 구성: 요약 → 점검 대상(서빙 경로) → CVE별 판정과 근거 경로 → 조치 사항(파일·줄 단위, 확인 명령, 영향) → 침해 징후(확인 필요) → 투명성 부록.
+`report.json`(기계 판독), `report_<lang>.md`(메일·이슈 첨부용), `report_<lang>.html`(A4 인쇄용). `<lang>`은 `--lang` 값입니다. `report.json`의 코드값(`verdict`, `priority`, `version_status` 등)은 언어와 무관하고, 설명 문장(`rationale`, `notes` 등)은 `--lang` 언어로 기록됩니다. 기존 연동 호환을 위해 판정 라벨 필드명은 `verdict_ko`를 유지하며 값은 `--lang` 언어입니다. 근거 문서 인용(`DOC:NN`)은 언어별 번역본을 가리키고, 번역본은 원문과 줄번호가 같습니다. 보고서 구성: 요약 → 점검 대상(서빙 경로) → CVE별 판정과 근거 경로 → 조치 사항(파일·줄 단위, 확인 명령, 영향) → 침해 징후(확인 필요) → 투명성 부록.
 
 ### 판정
 
@@ -94,6 +99,7 @@ python3 php2shell_remote.py <URL> [--timeout 초] [--max-bytes 바이트] [--caf
 | `--cafile` | 없음 | 시스템 신뢰 저장소에 **추가로** 신뢰할 CA/중간 CA 인증서 파일. PEM·DER 모두 가능. 검증은 유지됩니다. |
 | `--insecure` | 꺼짐 | HTTPS 인증서·호스트명 검증을 생략합니다. 사설 인증서를 쓰는 내부 테스트 서버에만 사용하십시오. `--cafile`보다 우선합니다. |
 | `--json` | 꺼짐 | 결과를 JSON으로 출력합니다. |
+| `--lang` | `ko` | `reason`·`notes`·화면 출력 언어(`ko`·`en`·`ja`). `status`는 언어와 무관한 코드값입니다. |
 
 ### 예시
 
@@ -190,6 +196,7 @@ PHP 버전·SAPI·패키지 배치·완화 상태가 다른 8개 사이트를 Do
 ```bash
 cd lab
 ./run.sh                 # Windows Git Bash: PYTHON=python ./run.sh
+REPORT_LANG=en ./run.sh  # 영어(en)·일본어(ja) 출력으로 실행
 cat out/summary.txt      # 사이트별 원격 판정과 내부 점검 요약
 docker compose down
 ```
@@ -204,7 +211,9 @@ docker compose down
 | 8336 | 공식 `php:8.3.36-fpm` · nginx | 수정 버전, 공식 이미지 배치 |
 | 8426 / 8427 | 공식 `php:8.4.26/27-apache` | 수정 직전·직후 mod_php |
 
-[docs/sample-report/](docs/sample-report/)는 이 랩의 한 사이트에서 생성한 실제 보고서입니다.
+[docs/sample-report/](docs/sample-report/)는 이 랩의 한 사이트(7403)에서 생성한 실제 보고서입니다(`report_ko`·`report_en`·`report_ja`의 `.md`/`.html`, `report.json`은 ko).
+
+메시지 카탈로그를 고친 뒤에는 `python lab/check_i18n.py`로 세 언어의 키·placeholder 일치를 확인합니다.
 
 ## 만든 사람
 

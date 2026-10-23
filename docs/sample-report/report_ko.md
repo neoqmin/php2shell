@@ -1,7 +1,7 @@
 # PHP2Shell 노출 점검 보고서
 
 **호스트:** php7403-u20-fpm-userini  
-**점검 시각:** 2026-10-23 04:09:25  
+**점검 시각:** 2026-10-23 22:48:26  
 **점검 도구:** php2shell_host.py v1.0 (비파괴: 실행 명령 0건, 네트워크 요청 0건)  
 **판정 근거:** PHP_취약점_동향_2026-10.md §2
 
@@ -17,7 +17,7 @@
 
 | ID | 대상 | 패키지 버전 | 버전 판정 | 실행 | 웹서버 |
 |---|---|---|---|---|---|
-| U01 | PHP 7.4 FPM pool [www] | 7.4.3-4ubuntu2.29 | PHP 7.4는 공식 수정 릴리스가 없고 소스 백포트만 있습니다(PHP_취약점_동향_2026-10.md:69). changelog(/usr/share/doc/php7.4-fpm/changelog.Debian.gz)에 CVE 백포트 기록 없음. | 실행 중 (시작 2026-10-23 02:42:03) | nginx lab-php7.4.localhost |
+| U01 | PHP 7.4 FPM pool [www] | 7.4.3-4ubuntu2.29 | PHP 7.4는 공식 수정 릴리스가 없고 소스 백포트만 있습니다(PHP_취약점_동향_2026-10.md:69). changelog(/usr/share/doc/php7.4-fpm/changelog.Debian.gz)에 CVE 백포트 기록 없음. | 실행 중 (시작 2026-10-23 21:50:31) | nginx lab-php7.4.localhost |
 
 ## 3. CVE별 판정
 

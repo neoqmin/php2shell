@@ -1,7 +1,7 @@
 {
   "project": "php7403-u20-fpm-userini",
   "tool": "php2shell_host.py v1.0",
-  "generated_at": "2026-10-23 04:09:25",
+  "generated_at": "2026-10-23 22:48:26",
   "basis": "PHP_취약점_동향_2026-10.md",
   "summary": {
     "units": 1,
@@ -28,7 +28,7 @@
       "pool": "www",
       "listen": "/run/php/php7.4-fpm.sock",
       "running": true,
-      "started_at": "2026-10-23 02:42:03",
+      "started_at": "2026-10-23 21:50:31",
       "frontends": [
         {
           "kind": "nginx",

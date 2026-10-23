@@ -2,11 +2,12 @@
 # Runs both checkers against every lab site and collects the results in lab/out/.
 #   remote: php2shell_remote.py from this machine against http://127.0.0.1:<port>/
 #   host:   php2shell_host.py inside each container (read-only), fed the remote JSON
-# Usage: ./run.sh            (PYTHON=python on Windows Git Bash)
+# Usage: ./run.sh            (PYTHON=python on Windows Git Bash; REPORT_LANG=en|ja for other languages)
 set -u
 export MSYS_NO_PATHCONV=1  # keep container paths like /tmp intact under Git Bash
 cd "$(dirname "$0")"
 PY="${PYTHON:-python3}"
+RL="${REPORT_LANG:-ko}"
 OUT=out
 rm -rf "$OUT" && mkdir -p "$OUT"
 
@@ -20,7 +21,7 @@ for svc in $(docker compose config --services); do
     sleep 1
   done
 
-  "$PY" ../php2shell_remote.py "http://127.0.0.1:$port/" --json > "$OUT/$svc.remote.json"
+  "$PY" ../php2shell_remote.py "http://127.0.0.1:$port/" --json --lang "$RL" > "$OUT/$svc.remote.json"
   remote=$("$PY" -c 'import json,sys; r=json.load(open(sys.argv[1], encoding="utf-8")); print(r["status"], r.get("detected_version") or "-")' "$OUT/$svc.remote.json")
 
   docker cp ../php2shell_host.py "$svc:/tmp/php2shell_host.py" >/dev/null
@@ -28,7 +29,7 @@ for svc in $(docker compose config --services); do
   # php2shell_host.py needs Python 3.7+; Ubuntu 18.04 ships 3.6 and needs the python3.8 package.
   py=$(docker exec "$svc" sh -c 'for p in python3.12 python3.11 python3.10 python3.9 python3.8 python3; do command -v $p && break; done')
   output=$(docker exec "$svc" "$py" /tmp/php2shell_host.py --remote-json /tmp/remote.json \
-           --out /tmp/php2shell_report 2>&1)
+           --out /tmp/php2shell_report --lang "$RL" 2>&1)
   hrc=$?
   echo "$output" > "$OUT/$svc.host.txt"
   summary=$(echo "$output" | head -1)
