@@ -1,3 +1,5 @@
+**한국어** | [English](README.en.md) | [日本語](README.ja.md)
+
 # php2shell-check
 
 PHP2Shell(CVE-2026-109618 / CVE-2026-109619) 노출을 **비파괴로** 점검하는 두 도구입니다. 판정 기준은 `PHP_취약점_동향_2026-10.md` §2입니다.
