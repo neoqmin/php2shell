@@ -1,0 +1,18 @@
+ARG PHP_TAG=8.3.36-fpm
+FROM php:${PHP_TAG}
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Old tags (7.2.x) are built on Debian 10, whose repositories moved to archive.debian.org.
+RUN if grep -q '^10' /etc/debian_version; then \
+      sed -i 's#deb.debian.org#archive.debian.org#g; s#security.debian.org#archive.debian.org#g; /buster-updates/d' /etc/apt/sources.list; \
+    fi \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends nginx python3 \
+ && rm -rf /var/lib/apt/lists/* \
+ && cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
+
+COPY site-nginx.conf /etc/nginx/sites-enabled/default
+COPY index.php /var/www/html/index.php
+RUN sed -i "s/@PHPV@/${PHP_VERSION}/g; s#@PASS@#127.0.0.1:9000#" /etc/nginx/sites-enabled/default
+
+CMD ["/bin/sh", "-c", "php-fpm -D && exec nginx -g 'daemon off;'"]

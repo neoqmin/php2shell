@@ -1,0 +1,54 @@
+# Local validation lab for php2shell-check.
+# Benign sites (index.php only) covering PHP branch, SAPI, package layout and
+# mitigation state. Host port = PHP version with a two-digit patch number
+# (7.2.34 -> 7234, 7.4.3 -> 7403). Bound to 127.0.0.1 only. No exploit traffic.
+name: php2shell-lab
+
+services:
+  php7224-u18-fpm:            # EOL branch without any patch (DOC:70); Ubuntu 18.04 ships python3.6
+    build: { context: ., dockerfile: Dockerfile.ubuntu-nginx, args: { UBUNTU: "18.04", PHPV: "7.2" } }
+    container_name: php7224-u18-fpm
+    hostname: php7224-u18-fpm
+    ports: ["127.0.0.1:7224:80"]
+
+  php7234-official-fpm:       # last 7.2 release, nginx + FPM (same version as the original remote finding)
+    build: { context: ., dockerfile: Dockerfile.official-fpm, args: { PHP_TAG: "7.2.34-fpm" } }
+    container_name: php7234-official-fpm
+    hostname: php7234-official-fpm
+    ports: ["127.0.0.1:7234:80"]
+
+  php7403-u20-fpm-userini:    # backport-only branch + ineffective .user.ini mitigation (DOC:108)
+    build: { context: ., dockerfile: Dockerfile.ubuntu-nginx, args: { UBUNTU: "20.04", PHPV: "7.4", USERINI: "1" } }
+    container_name: php7403-u20-fpm-userini
+    hostname: php7403-u20-fpm-userini
+    ports: ["127.0.0.1:7403:80"]
+
+  php8102-u22-modphp:         # Apache mod_php (highest risk SAPI, DOC:43)
+    build: { context: ., dockerfile: Dockerfile.ubuntu-apache, args: { UBUNTU: "22.04", PHPV: "8.1" } }
+    container_name: php8102-u22-modphp
+    hostname: php8102-u22-modphp
+    ports: ["127.0.0.1:8102:80"]
+
+  php8306-u24-fpm-mitigated:  # supported branch, pool php_admin_value mitigations applied
+    build: { context: ., dockerfile: Dockerfile.ubuntu-nginx, args: { UBUNTU: "24.04", PHPV: "8.3", MITIGATE: "1" } }
+    container_name: php8306-u24-fpm-mitigated
+    hostname: php8306-u24-fpm-mitigated
+    ports: ["127.0.0.1:8306:80"]
+
+  php8336-official-fpm:       # fixed release (DOC:67), official image layout
+    build: { context: ., dockerfile: Dockerfile.official-fpm, args: { PHP_TAG: "8.3.36-fpm" } }
+    container_name: php8336-official-fpm
+    hostname: php8336-official-fpm
+    ports: ["127.0.0.1:8336:80"]
+
+  php8426-official-apache:    # one release before the fix, mod_php
+    build: { context: ., dockerfile: Dockerfile.official-apache, args: { PHP_TAG: "8.4.26-apache" } }
+    container_name: php8426-official-apache
+    hostname: php8426-official-apache
+    ports: ["127.0.0.1:8426:80"]
+
+  php8427-official-apache:    # fixed release (DOC:66), mod_php
+    build: { context: ., dockerfile: Dockerfile.official-apache, args: { PHP_TAG: "8.4.27-apache" } }
+    container_name: php8427-official-apache
+    hostname: php8427-official-apache
+    ports: ["127.0.0.1:8427:80"]

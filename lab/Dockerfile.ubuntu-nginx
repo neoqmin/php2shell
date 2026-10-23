@@ -1,0 +1,26 @@
+ARG UBUNTU=20.04
+FROM ubuntu:${UBUNTU}
+ARG PHPV=7.4
+ARG MITIGATE=0
+ARG USERINI=0
+ENV DEBIAN_FRONTEND=noninteractive PHPV=${PHPV}
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends nginx php${PHPV}-fpm python3 \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY site-nginx.conf /etc/nginx/sites-enabled/default
+COPY index.php /var/www/html/index.php
+RUN sed -i "s/@PHPV@/${PHPV}/g; s#@PASS@#unix:/run/php/php${PHPV}-fpm.sock#" /etc/nginx/sites-enabled/default \
+ && sed -i 's/^;*expose_php.*/expose_php = On/' /etc/php/${PHPV}/fpm/php.ini \
+ && if [ "$MITIGATE" = 1 ]; then \
+      printf '%s\n' \
+        'php_admin_value[session.upload_progress.enabled] = 0' \
+        'php_admin_value[memory_limit] = -1' \
+        'php_admin_value[post_max_size] = 8M' \
+        'php_admin_value[upload_max_filesize] = 2M' >> /etc/php/${PHPV}/fpm/pool.d/www.conf; \
+      sed -i 's/^expose_php.*/expose_php = Off/' /etc/php/${PHPV}/fpm/php.ini; \
+    fi \
+ && if [ "$USERINI" = 1 ]; then echo 'session.upload_progress.enabled = 0' > /var/www/html/.user.ini; fi
+
+CMD ["/bin/sh", "-c", "mkdir -p /run/php && php-fpm${PHPV} && exec nginx -g 'daemon off;'"]

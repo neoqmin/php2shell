@@ -1,0 +1,14 @@
+ARG UBUNTU=22.04
+FROM ubuntu:${UBUNTU}
+ARG PHPV=8.1
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends apache2 libapache2-mod-php${PHPV} python3 \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY index.php /var/www/html/index.php
+RUN rm -f /var/www/html/index.html \
+ && sed -i 's/^;*expose_php.*/expose_php = On/' /etc/php/${PHPV}/apache2/php.ini
+
+CMD ["apache2ctl", "-D", "FOREGROUND"]

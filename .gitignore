@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+
+# Scan results contain target vulnerability data (see LEGAL.md §4)
+php2shell_report_*/
+report.json
+report_ko.md
+report.html
+remote*.json
+targets.txt
+
+# lab run output (contains scan results)
+lab/out/
+
+# Published sample report from the local lab (no real target data)
+!docs/sample-report/
+!docs/sample-report/*

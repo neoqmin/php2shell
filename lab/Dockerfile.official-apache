@@ -1,0 +1,10 @@
+ARG PHP_TAG=8.4.27-apache
+FROM php:${PHP_TAG}
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 \
+ && rm -rf /var/lib/apt/lists/* \
+ && cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
+
+COPY index.php /var/www/html/index.php
