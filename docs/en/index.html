@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PHP2Shell Vulnerability Checker (CVE-2026-109618 · CVE-2026-109619) — php2shell-check</title>
+<meta name="description" content="Free, open-source, non-destructive checker for PHP2Shell (CVE-2026-109618, CVE-2026-109619). Triage your site's PHP version from its URL, then run the on-server check for a SAPI- and config-aware report with exact fixes.">
+<link rel="canonical" href="https://neoqmin.github.io/php2shell/en/">
+<link rel="alternate" hreflang="ko" href="https://neoqmin.github.io/php2shell/">
+<link rel="alternate" hreflang="en" href="https://neoqmin.github.io/php2shell/en/">
+<link rel="alternate" hreflang="ja" href="https://neoqmin.github.io/php2shell/ja/">
+<link rel="alternate" hreflang="x-default" href="https://neoqmin.github.io/php2shell/en/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PHP2Shell Vulnerability Checker — php2shell-check">
+<meta property="og:description" content="Non-destructive check for CVE-2026-109618 / CVE-2026-109619 exposure. Start from your site's URL.">
+<meta property="og:url" content="https://neoqmin.github.io/php2shell/en/">
+<meta property="og:locale" content="en_US">
+<link rel="stylesheet" href="../assets/site.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "php2shell-check",
+  "description": "Open-source, non-destructive checker for PHP2Shell (CVE-2026-109618, CVE-2026-109619) exposure",
+  "applicationCategory": "SecurityApplication",
+  "operatingSystem": "Linux, macOS, Windows",
+  "softwareVersion": "0.1.0",
+  "license": "https://opensource.org/licenses/MIT",
+  "codeRepository": "https://github.com/neoqmin/php2shell",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+</head>
+<body>
+<header>
+  <nav class="lang"><a href="../">한국어</a><strong>English</strong><a href="../ja/">日本語</a> · <a href="https://github.com/neoqmin/php2shell">GitHub</a></nav>
+</header>
+<main>
+<h1>PHP2Shell Check (CVE-2026-109618 · CVE-2026-109619)</h1>
+<p class="lead">A free, open-source tool that checks <strong>non-destructively</strong> whether the PHP sites you run are exposed to PHP2Shell.</p>
+<p class="badges"><span>Free · MIT</span><span>Python 3.8+ stdlib only</span><span>No attack traffic</span><span>Reports in English · 한국어 · 日本語</span></p>
+
+<div class="warn"><strong>⚠️ Use only on systems you own or are authorized in writing to test.</strong> Even non-destructive scanning without permission may be illegal in your jurisdiction (<a href="https://github.com/neoqmin/php2shell/blob/main/LEGAL.md">LEGAL.md</a>).</div>
+
+<h2>What is PHP2Shell</h2>
+<p>Two PHP runtime vulnerabilities disclosed on 2026-10-21, both rated CVSS v4.0 9.2. They lead to unauthenticated remote code execution (RCE), and virtually every PHP installation that serves web requests (Apache mod_php, PHP-FPM, …) is affected. Public PoCs exist, and real attack attempts were observed from 10-17, four days before disclosure.</p>
+<table>
+<thead><tr><th>PHP branch</th><th>Fixed in</th></tr></thead>
+<tbody>
+<tr><td>8.5</td><td>8.5.12 or later</td></tr>
+<tr><td>8.4</td><td>8.4.27 or later</td></tr>
+<tr><td>8.3</td><td>8.3.36 or later</td></tr>
+<tr><td>8.2</td><td>8.2.35 or later</td></tr>
+<tr><td>8.1 and older</td><td class="bad">No official fix release — use distro/LTS vendor packages or upgrade</td></tr>
+</tbody>
+</table>
+<p class="note">Distribution packages (e.g. <code>8.2.7-1+deb12u5</code>) may carry backported fixes despite a lower version number. Baseline as of 2026-10-23. Details: <a href="https://github.com/neoqmin/php2shell/blob/main/PHP_%EC%B7%A8%EC%95%BD%EC%A0%90_%EB%8F%99%ED%96%A5_2026-10.en.md">PHP vulnerability trends §2</a></p>
+
+<h2>Step 1 — Triage from your site's URL</h2>
+<p>Enter your site's address and this page builds <strong>a command to run on your own computer</strong>. The checker sends a single HTTP <code>GET</code> to the target and compares the PHP version exposed in the response headers against the fixed versions.</p>
+<form id="gen" class="panel" novalidate
+  data-err-empty="Enter a URL."
+  data-err-scheme="Enter an address starting with http:// or https://."
+  data-err-chars="The URL contains characters that are not allowed (spaces, quotes, $ ; | &amp; ( ) …). Try just the site's front-page address."
+  data-err-cred="URLs containing a username or password are not allowed."
+  data-err-auth="Please confirm you own this site or are authorized to test it."
+  data-copy="Copy" data-copied="Copied">
+  <label for="target">Site address to check</label>
+  <div class="row">
+    <input id="target" type="url" placeholder="https://www.example.com/" autocomplete="url" spellcheck="false">
+    <button class="primary" type="submit">Build command</button>
+  </div>
+  <label class="check"><input id="authorized" type="checkbox"> I own this site or am authorized to test it.</label>
+  <p id="gen-error" class="error" role="alert"></p>
+  <p class="note">The address you enter never leaves this page. The command is built inside your browser, and this site uses no analytics scripts.</p>
+  <div id="gen-out" hidden>
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" data-os="linux">Linux</button>
+      <button type="button" role="tab" data-os="macos">macOS</button>
+      <button type="button" role="tab" data-os="windows">Windows (PowerShell)</button>
+    </div>
+    <div id="cmd-linux" class="codebox"><pre></pre></div>
+    <div id="cmd-macos" class="codebox" hidden><pre></pre></div>
+    <div id="cmd-windows" class="codebox" hidden><pre></pre></div>
+    <p class="note">The second line verifies via SHA256 that the downloaded file matches the published v0.1.0. Do not run it on a mismatch. On Windows, use <code>py</code> if <code>python</code> is not found.</p>
+  </div>
+</form>
+
+<h3>Reading the result</h3>
+<table>
+<thead><tr><th>Verdict</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code class="bad">likely_vulnerable</code></td><td>The exposed PHP version is below the fixed version, or is an EOL branch (below 8.2) with no official fix. Confirm with Step 2.</td></tr>
+<tr><td><code class="ok">not_vulnerable_by_version</code></td><td>The exposed version is at or above the fixed baseline. A supporting signal only, not a guarantee.</td></tr>
+<tr><td><code>unknown</code></td><td>PHP traces found but the version is hidden (or only partially shown, like <code>8.3</code>).</td></tr>
+<tr><td><code>not_detected</code></td><td>No PHP traces in the response. This does not mean PHP is absent.</td></tr>
+<tr><td><code>error</code> / <code>invalid</code></td><td>Connection/TLS error, or malformed URL.</td></tr>
+</tbody>
+</table>
+<p class="note">Production servers usually hide the version, so <code>unknown</code> is common. The version alone cannot tell whether an attack path actually holds; if you have server access, run Step 2.</p>
+
+<h2>Step 2 — Confirm on the server</h2>
+<p>Run this on the (Linux) server running PHP. It <strong>only reads</strong> configuration files, package data, <code>/proc</code> and logs — zero commands executed, zero network requests. It decides per-CVE reachability from the SAPI (mod_php/FPM) and effective settings (<code>memory_limit</code>, <code>session.upload_progress.enabled</code>, …) and reports which file and line to fix.</p>
+<div class="codebox"><pre>curl -fsSLO https://raw.githubusercontent.com/neoqmin/php2shell/v0.1.0/php2shell_host.py
+echo '50a48c79c120774e9dccc27ee12672444b7730b31a32c2b833e650920ebf0925  php2shell_host.py' | sha256sum -c -
+sudo python3 php2shell_host.py --lang en</pre></div>
+<p>Output goes to <code>./php2shell_report_&lt;host&gt;/</code> as <code>report.json</code>, <code>report_en.md</code> and <code>report_en.html</code> (A4 printable). The report contains the server's vulnerability details — do not publish it.</p>
+<p>Sample report (local lab, no real target): <a href="../sample-report/report_en.html">HTML</a> · <a href="../sample-report/report_en.md">Markdown</a> · <a href="../sample-report/report.json">JSON</a></p>
+<table>
+<thead><tr><th>Verdict</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td class="bad">Reachable</td><td>The attack path's preconditions hold given this server's SAPI and effective configuration</td></tr>
+<tr><td>Mitigated (temporary)</td><td>A temporary mitigation is applied before request parsing. <strong>Not safe</strong> — configuration alone does not fully mitigate</td></tr>
+<tr><td>Undetermined</td><td>Insufficient evidence or failed to read config. This is not "unreachable"</td></tr>
+<tr><td class="ok">Patched</td><td>At or above the fixed version, or the package changelog records a backport of both CVEs</td></tr>
+</tbody>
+</table>
+<p class="note">Supported: Debian/Ubuntu packages (Apache mod_php, nginx/Apache + PHP-FPM) and the official Docker <code>php:*-apache</code> image. RHEL-family package versions, the official <code>php:*-fpm</code> image, php-cgi, LiteSpeed and FrankenPHP are not assessed yet. See the <a href="https://github.com/neoqmin/php2shell/blob/main/README.en.md">README</a> for all options and limitations.</p>
+
+<h2>If you cannot patch right now</h2>
+<p>Updating PHP is the only complete fix. Temporary mitigations until then (<code>session.upload_progress.enabled=0</code>, tuning <code>memory_limit</code>/<code>post_max_size</code>, blocking multipart, …) only work when set <strong>where they apply before request parsing</strong>, such as php.ini or the FPM pool. <code>ini_set()</code> and FPM <code>.user.ini</code> have no effect. The Step 2 report tells you where to change each server. Source: <a href="https://github.com/neoqmin/php2shell/blob/main/PHP_%EC%B7%A8%EC%95%BD%EC%A0%90_%EB%8F%99%ED%96%A5_2026-10.en.md#26-response-measures">trends §2.6</a></p>
+
+<h2>FAQ</h2>
+<details><summary>If the remote check says not_vulnerable_by_version, am I safe?</summary><p>No. It only means the version shown in the headers meets the baseline; proxies and load balancers can mask the version, and SAPI and settings cannot be seen remotely. Make the final call from your server inventory and Step 2.</p></details>
+<details><summary>How do I check a server that hides its version (unknown)?</summary><p>You can't from outside. On the server, check <code>php -v</code> and the package changelog, or run the Step 2 checker.</p></details>
+<details><summary>Can I check another company's site?</summary><p>Not without permission. Even a single non-destructive GET, done systematically without authorization, may break computer-misuse laws. If you notice a problem on someone else's server, do not verify it yourself — notify the operator or your national CERT.</p></details>
+<details><summary>What does the tool collect or send?</summary><p>Nothing. The remote checker sends one GET to the target you enter; the host checker makes no network requests. The report's transparency appendix lists every file it read.</p></details>
+<details><summary>Does it contain exploit (PoC) code?</summary><p>No. It contains no payloads, exploits or bypass techniques, and does not link to exploit repositories.</p></details>
+</main>
+<footer>
+  <p>php2shell-check v0.1.0 · Code MIT, docs under a <a href="https://github.com/neoqmin/php2shell/blob/main/LICENSE-docs.md">separate license</a> · <a href="https://github.com/neoqmin/php2shell/issues">Report false positives/negatives</a> (never post a specific system's vulnerability details)</p>
+  <p>Verdicts are estimates based on public information and configuration files, without warranty. PHP is a trademark of The PHP Group; this project is not affiliated with The PHP Group or the PHP Foundation.</p>
+</footer>
+<script src="../assets/gen.js"></script>
+</body>
+</html>

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PHP2Shell 脆弱性点検ツール（CVE-2026-109618・CVE-2026-109619）— php2shell-check</title>
+<meta name="description" content="PHP2Shell（CVE-2026-109618、CVE-2026-109619）の露出を非破壊で点検する無料のオープンソースツール。サイトのURLからPHPバージョンを一次確認し、サーバー内部点検でSAPI・設定に基づく到達可能性と対処箇所をレポートします。">
+<link rel="canonical" href="https://neoqmin.github.io/php2shell/ja/">
+<link rel="alternate" hreflang="ko" href="https://neoqmin.github.io/php2shell/">
+<link rel="alternate" hreflang="en" href="https://neoqmin.github.io/php2shell/en/">
+<link rel="alternate" hreflang="ja" href="https://neoqmin.github.io/php2shell/ja/">
+<link rel="alternate" hreflang="x-default" href="https://neoqmin.github.io/php2shell/en/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PHP2Shell 脆弱性点検ツール — php2shell-check">
+<meta property="og:description" content="CVE-2026-109618 / CVE-2026-109619 の露出を非破壊で点検。サイトのURLからすぐ確認。">
+<meta property="og:url" content="https://neoqmin.github.io/php2shell/ja/">
+<meta property="og:locale" content="ja_JP">
+<link rel="stylesheet" href="../assets/site.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "php2shell-check",
+  "description": "PHP2Shell（CVE-2026-109618、CVE-2026-109619）の露出を非破壊で点検するオープンソースツール",
+  "applicationCategory": "SecurityApplication",
+  "operatingSystem": "Linux, macOS, Windows",
+  "softwareVersion": "0.1.0",
+  "license": "https://opensource.org/licenses/MIT",
+  "codeRepository": "https://github.com/neoqmin/php2shell",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "JPY" }
+}
+</script>
+</head>
+<body>
+<header>
+  <nav class="lang"><a href="../">한국어</a><a href="../en/">English</a><strong>日本語</strong> · <a href="https://github.com/neoqmin/php2shell">GitHub</a></nav>
+</header>
+<main>
+<h1>PHP2Shell 点検（CVE-2026-109618・CVE-2026-109619）</h1>
+<p class="lead">自分が管理するPHPサイトがPHP2Shellに露出しているかを<strong>非破壊で</strong>確認する、無料のオープンソースツールです。</p>
+<p class="badges"><span>無料・MIT</span><span>Python 3.8+ 標準ライブラリのみ</span><span>攻撃リクエストなし</span><span>日本語・English・한국어 レポート</span></p>
+
+<div class="warn"><strong>⚠️ 自己所有であるか、書面で点検許可を得たシステムにのみ使用してください。</strong>非破壊のリクエストでも、許可のない点検は法的問題になり得ます（<a href="https://github.com/neoqmin/php2shell/blob/main/LEGAL.md">LEGAL.md</a>）。</div>
+
+<h2>PHP2Shellとは</h2>
+<p>2026-10-21に公開されたPHPランタイムの脆弱性2件で、どちらもCVSS v4.0 9.2です。認証不要のリモートコード実行（RCE）につながり、Webリクエストを処理するPHP（Apache mod_php、PHP-FPMなど）は事実上すべて影響を受けます。公開PoCが存在し、公開4日前（10-17）から実際の攻撃試行が観測されています。</p>
+<table>
+<thead><tr><th>PHPブランチ</th><th>修正バージョン</th></tr></thead>
+<tbody>
+<tr><td>8.5</td><td>8.5.12 以上</td></tr>
+<tr><td>8.4</td><td>8.4.27 以上</td></tr>
+<tr><td>8.3</td><td>8.3.36 以上</td></tr>
+<tr><td>8.2</td><td>8.2.35 以上</td></tr>
+<tr><td>8.1 以下</td><td class="bad">公式の修正リリースなし — ディストリ・LTSベンダーのパッケージを使うかアップグレード</td></tr>
+</tbody>
+</table>
+<p class="note">ディストリビューションのパッケージ（例：<code>8.2.7-1+deb12u5</code>）はバージョン番号が低くてもバックポートで修正済みの場合があります。基準時点 2026-10-23。詳細：<a href="https://github.com/neoqmin/php2shell/blob/main/PHP_%EC%B7%A8%EC%95%BD%EC%A0%90_%EB%8F%99%ED%96%A5_2026-10.ja.md">PHP脆弱性動向 §2</a></p>
+
+<h2>ステップ1 — サイトのURLで一次確認</h2>
+<p>サイトのアドレスを入力すると、<strong>自分のPCで実行するコマンド</strong>を作成します。点検ツールは対象にHTTP <code>GET</code>を1回だけ送り、応答ヘッダーに表れたPHPバージョンを修正バージョンと比較します。</p>
+<form id="gen" class="panel" novalidate
+  data-err-empty="URLを入力してください。"
+  data-err-scheme="http:// または https:// で始まるアドレスを入力してください。"
+  data-err-chars="URLに使用できない文字（空白、引用符、$ ; | &amp; ( ) など）が含まれています。サイトのトップページのアドレスだけを入力してみてください。"
+  data-err-cred="ユーザー名・パスワードを含むURLは使用できません。"
+  data-err-auth="自己所有または点検許可を得たサイトであることを確認してください。"
+  data-copy="コピー" data-copied="コピー済み">
+  <label for="target">点検するサイトのアドレス</label>
+  <div class="row">
+    <input id="target" type="url" placeholder="https://www.example.com/" autocomplete="url" spellcheck="false">
+    <button class="primary" type="submit">コマンド作成</button>
+  </div>
+  <label class="check"><input id="authorized" type="checkbox"> このサイトは自分が所有しているか、点検許可を得ています。</label>
+  <p id="gen-error" class="error" role="alert"></p>
+  <p class="note">入力したアドレスはこのページの外に送信されません。コマンドはブラウザ内だけで作成され、このサイトは解析スクリプトを使用しません。</p>
+  <div id="gen-out" hidden>
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" data-os="linux">Linux</button>
+      <button type="button" role="tab" data-os="macos">macOS</button>
+      <button type="button" role="tab" data-os="windows">Windows (PowerShell)</button>
+    </div>
+    <div id="cmd-linux" class="codebox"><pre></pre></div>
+    <div id="cmd-macos" class="codebox" hidden><pre></pre></div>
+    <div id="cmd-windows" class="codebox" hidden><pre></pre></div>
+    <p class="note">2行目は、ダウンロードしたファイルが公開済みのv0.1.0と同一かをSHA256で確認します。一致しない場合は実行しないでください。Windowsで<code>python</code>が見つからない場合は<code>py</code>に置き換えてください。</p>
+  </div>
+</form>
+
+<h3>結果の読み方</h3>
+<table>
+<thead><tr><th>判定</th><th>意味</th></tr></thead>
+<tbody>
+<tr><td><code class="bad">likely_vulnerable</code></td><td>公開されているPHPバージョンが修正バージョン未満、または公式修正のないEOLブランチ（8.2未満）。ステップ2で確定してください。</td></tr>
+<tr><td><code class="ok">not_vulnerable_by_version</code></td><td>公開バージョンが修正基準以上。補助的な信号であり、安全の保証ではありません。</td></tr>
+<tr><td><code>unknown</code></td><td>PHPの痕跡はあるがバージョン非公開（または<code>8.3</code>のように一部のみ公開）。</td></tr>
+<tr><td><code>not_detected</code></td><td>応答からPHPの痕跡を発見できず。PHPが存在しないという意味ではありません。</td></tr>
+<tr><td><code>error</code> / <code>invalid</code></td><td>接続・TLSエラー、またはURL形式エラー。</td></tr>
+</tbody>
+</table>
+<p class="note">本番サーバーは多くの場合バージョンを隠すため、<code>unknown</code>はよくある結果です。バージョンだけでは実際の攻撃経路が成立するかはわからないため、サーバーにアクセスできるならステップ2を実行してください。</p>
+
+<h2>ステップ2 — サーバー内で確定点検</h2>
+<p>PHPが動作する（Linux）サーバーで実行します。設定ファイル・パッケージ情報・<code>/proc</code>・ログを<strong>読むだけ</strong>で、コマンド実行0件・ネットワーク要求0件です。SAPI（mod_php/FPM）と実効設定（<code>memory_limit</code>、<code>session.upload_progress.enabled</code>など）からCVEごとの到達可能性を判定し、直すべきファイルと行番号をレポートに残します。</p>
+<div class="codebox"><pre>curl -fsSLO https://raw.githubusercontent.com/neoqmin/php2shell/v0.1.0/php2shell_host.py
+echo '50a48c79c120774e9dccc27ee12672444b7730b31a32c2b833e650920ebf0925  php2shell_host.py' | sha256sum -c -
+sudo python3 php2shell_host.py --lang ja</pre></div>
+<p>結果は<code>./php2shell_report_&lt;ホスト&gt;/</code>に<code>report.json</code>、<code>report_ja.md</code>、<code>report_ja.html</code>（A4印刷用）として保存されます。レポートにはサーバーの脆弱性情報が含まれるため、公開しないでください。</p>
+<p>レポート例（ローカル検証環境、実在の対象ではありません）：<a href="../sample-report/report_ja.html">HTML</a> · <a href="../sample-report/report_ja.md">Markdown</a> · <a href="../sample-report/report.json">JSON</a></p>
+<table>
+<thead><tr><th>判定</th><th>意味</th></tr></thead>
+<tbody>
+<tr><td class="bad">到達可能</td><td>このサーバーのSAPI・実効設定で攻撃経路の前提条件が成立</td></tr>
+<tr><td>緩和済み（一時的）</td><td>一時緩和策がリクエスト解析前の段階に適用されている。<strong>安全ではない</strong> — 設定だけでは完全には緩和されない</td></tr>
+<tr><td>判定保留</td><td>根拠不足・設定の読み取り失敗。到達不可という意味ではない</td></tr>
+<tr><td class="ok">パッチ済み</td><td>修正バージョン以上、またはパッケージのchangelogに両CVEのバックポート記録あり</td></tr>
+</tbody>
+</table>
+<p class="note">対応：Debian/Ubuntuパッケージ（Apache mod_php、nginx/Apache + PHP-FPM）、公式Docker <code>php:*-apache</code>イメージ。RHEL系のパッケージバージョン、公式<code>php:*-fpm</code>イメージ、php-cgi・LiteSpeed・FrankenPHPはまだ判定できません。全オプションと制限は<a href="https://github.com/neoqmin/php2shell/blob/main/README.ja.md">README</a>を参照してください。</p>
+
+<h2>すぐにパッチを当てられない場合</h2>
+<p>唯一の完全な解決策はPHPの更新です。パッチまでの一時緩和（<code>session.upload_progress.enabled=0</code>、<code>memory_limit</code>・<code>post_max_size</code>の調整、multipartの遮断など）は、<strong>php.ini・FPM poolのようにリクエスト解析前に適用される場所</strong>に設定しないと効果がありません。<code>ini_set()</code>とFPMの<code>.user.ini</code>は効果がありません。サーバーごとにどこを直すかはステップ2のレポートが示します。根拠：<a href="https://github.com/neoqmin/php2shell/blob/main/PHP_%EC%B7%A8%EC%95%BD%EC%A0%90_%EB%8F%99%ED%96%A5_2026-10.ja.md#26-対応方針">動向 §2.6</a></p>
+
+<h2>よくある質問</h2>
+<details><summary>リモート点検で not_vulnerable_by_version なら安全ですか？</summary><p>いいえ。ヘッダーに表れたバージョンが基準以上というだけで、プロキシ・ロードバランサーがバージョンを隠すことや、SAPI・設定のようにリモートでは見えない条件があります。最終判断はサーバーインベントリとステップ2で行ってください。</p></details>
+<details><summary>バージョンを隠しているサーバー（unknown）はどう確認しますか？</summary><p>外部からは確認できません。サーバーで<code>php -v</code>とパッケージのchangelogを確認するか、ステップ2の点検ツールを実行してください。</p></details>
+<details><summary>他社のサイトも点検できますか？</summary><p>許可なく行わないでください。非破壊のGETでも、許可のない体系的な点検は不正アクセス禁止法などに抵触するおそれがあります。他組織のサーバーで問題に気づいた場合は自分で検証せず、運用主体またはIPA・JPCERT/CCに連絡してください。</p></details>
+<details><summary>ツールは何を収集・送信しますか？</summary><p>何も送信しません。リモート点検ツールは入力した対象にGETを1回送るだけで、サーバー点検ツールはネットワーク要求を行いません。レポートの透明性付録に、読み取ったファイルの一覧が記録されます。</p></details>
+<details><summary>攻撃（PoC）コードは含まれていますか？</summary><p>含まれていません。攻撃ペイロード、エクスプロイト、回避手法を含まず、エクスプロイトのリポジトリにもリンクしていません。</p></details>
+</main>
+<footer>
+  <p>php2shell-check v0.1.0 · コードはMIT、ドキュメントは<a href="https://github.com/neoqmin/php2shell/blob/main/LICENSE-docs.md">別ライセンス</a> · <a href="https://github.com/neoqmin/php2shell/issues">誤検知・見逃しの報告</a>（特定システムの脆弱性情報は書かないでください）</p>
+  <p>判定結果は公開情報と設定ファイルに基づく推定であり、保証はありません。PHPはThe PHP Groupの商標であり、本プロジェクトはThe PHP Group・PHP Foundationとは関係ありません。</p>
+</footer>
+<script src="../assets/gen.js"></script>
+</body>
+</html>

@@ -9,6 +9,8 @@ Two tools that **non-destructively** check for PHP2Shell (CVE-2026-109618 / CVE-
 | `php2shell_remote.py` | Anywhere (target URL) | Is the publicly exposed PHP version a vulnerable one — first-pass triage |
 | `php2shell_host.py` | On the PHP server | Does an attack path hold given this server's SAPI and effective configuration, and what must be fixed where — administrator report |
 
+**Start from the web:** https://neoqmin.github.io/php2shell/en/ — enter your site's address to get a ready-to-run check command (the address never leaves your browser).
+
 Version alone cannot tell you whether the path is actually reachable. Confirm any server flagged by the remote check with the host-side checker.
 
 > **⚠️ Use only on authorized systems.** Target only systems you own or have written permission to assess. The software is provided without warranty, and the generated report contains the target's vulnerability information, so do not publish it. See [LEGAL.md](LEGAL.md) for details.
