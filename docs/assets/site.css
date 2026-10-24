@@ -91,3 +91,7 @@ button.primary {
 details { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
 summary { cursor: pointer; font-weight: 600; }
 footer { margin-top: 48px; padding-bottom: 40px; font-size: 14px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
+figure { margin: 16px 0 20px; }
+figure img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+figcaption { font-size: 14px; color: var(--muted); margin-top: 6px; }
+main.article h3 { font-size: 1.25rem; margin-top: 32px; }
